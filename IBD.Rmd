@@ -19,15 +19,17 @@ I.    Project Setup
 II.   GWAS Genes and ID Conversion
 III.  Expression Data
 IV.   Gene Positions
-V.    SVM
-VI.   Integrate Gene Information with SVM Output
-VII.  Gene Scores
-XI.   Plotting Integrated Ranking
+V.    Data Cleanup and Consolidation
+VI.   SVM
+VII.  Integrate Gene Information with SVM Output
+VIII. Gene Scores
+IX.   Plot value preparation
+X.    Plotting Integrated Ranking
 
 ## I. Project Setup
 
 A. Packages
-```{r libraries}
+```{r setup}
 all.packages <- c("tidyverse", 
                   "ggplot2", 
                   "here", 
@@ -46,7 +48,8 @@ all.packages <- c("tidyverse",
                   "hablar", 
                   "plotly",
                   "forcats", 
-                  "magrittr")
+                  "magrittr",
+                  "e1071")
 for(i in 1:length(all.packages)){library(all.packages[i], character.only = TRUE)} 
 conflict_prefer("filter", "dplyr")
 ```
@@ -110,6 +113,7 @@ IBD.gconvert <- gconvert(IBD.mouse.orth$ortholog_name, organism = "mmusculus", t
 ## III.  Expression Data
 
 This workflow incorporates gene expression data from five different immune cells (Krementsov lab). 
+A. Read in DEG data
 ```{r DEG_data}
 #read in excel file with differentially expressed genes (DEG) data
 DEG.all.original <- read_excel(here("Data", "DE_genes", "Full microarray for Matt - v3.xlsx"), sheet = "v3 2nd dup removal")
@@ -156,12 +160,44 @@ Ccc1.gene.info <- Ccc1.gene.biomart %>%
          EntrezID = entrezgene_id, 
          Chr = chromosome_name) %>% 
   mutate(across(starts_with("Chr"), as.character))
+```
 
+## V.    Data Cleanup and Consolidation
+
+We consolidated gene infomration into a table (DEG.all) with gene expression data and position data. We also filtered for chromosome 1 and 2 (DEG.chr). In addition, this specific dataset has some 0 values for p-values, which will need to be converted to non-zero values to put through this workflow. 
+A. Add gene position table with DEG table
+```{r DEG.all}
 #add Ccc1 to DEG (there are some in Ccc1 entrez genes not in Deg, so filtering later would miss genes)
 DEG.all <- bind_rows(DEG.all, Ccc1.gene.info)
 ```
 
-## V. SVM
+B. Chromosome 1 and 2 filter
+```{r Chr_filter}
+#filter chr 1 and 2 (this will make running score.candidates go faster, you can also do all DEG.all)
+DEG.chr <- DEG.all %>% 
+  filter(Chr == 1 | Chr == 2)
+```
+
+C. DEG p-value cleanup
+Convert p-values that are 0 to non-zero minimums (to be able to log transform and scale)
+```{r DEG_cleanup}
+#Finding min non-zero value for each p-value (ONLY from DEG.chr, did not go through entire DEG.all), this may not be necessary for each p-value column
+min(DEG.chr$APCpv[DEG.chr$APCpv!=0])
+min(DEG.chr$BCELLpv[DEG.chr$BCELLpv!=0])
+min(DEG.chr$CD4pv[DEG.chr$CD4pv!=0])
+min(DEG.chr$CD8pv[DEG.chr$CD8pv!=0])
+min(DEG.chr$TREGpv[DEG.chr$TREGpv!=0])
+
+#replacing 0 values with non-zero mins
+DEG.chr %<>%
+  mutate(APCpv   = replace(APCpv, which(APCpv == 0), 10^(-43)),
+         BCELLpv = replace(BCELLpv, which(BCELLpv == 0), 10^(-41)),
+         CD4pv   = replace(CD4pv, which(CD4pv == 0), 10^(-28)), 
+         CD8pv   = replace(CD8pv, which(CD8pv == 0), 10^(-28)), 
+         TREGpv  = replace(TREGpv, which(TREGpv == 0), 10^(-35)))
+```
+
+## VI. SVM
 
 We ran the SVM analysis separately for the specified networks. The SVMs were trained to distinguish genes in the gene list from randomly chosen genes from outside the list. We use the function generate.triage.models() to accomplish this, which uses the ``svm`` function in the package ``e1071``. The features used by the SVM are the edge weights between all genes and the genes in the GWAS gene list. For each of the 100 SVM models, we used the GWAS genes as the true positives, while the true negatives were selected at random from outside of that gene set. Each true negative set was selected to have the same number of genes as were in the true positive set. 
 
@@ -208,298 +244,127 @@ C. Apply the trained models to genes
 After training the SVM models, we use them to classify each gene, where each gene recieves a score from each SVM indicating whether the model identifies it as part of the [network] gene list (a positive score) or not part of the gene list (negative score). The score.candidates function writes out all of the values to two csv tables (Candidate.Gene.SVM.Scores.csv and Candidate.Gene.FP.Rates.csv). [Note: The function also plots boxplots of the distributions of the SVM scores and the false positive (FP) rates for each gene in two jpgs (Candidate.Gene.SVM.Scores.jpg, and Candidate.Gene.FP.Rates.jpg). Plots are ordered by mean value. however, this iteration doesn't create them??]
 The genes that are on the left are classified confidently by the SVM as being related to the [network] gene list. The distributions of their SVM scores do not cross 0. The genes on the right hand side are classified confidently by the SVM as not being related to the [network] gene list. The genes in between are less confidently classified across the SVM trials. 
 ```{r score_candidates}
-
-test <- DEG.all %>% 
-  filter(!is.na(EntrezID))
-
-DEG.chr.1.2.12 <- DEG.all %>% 
-  filter(Chr %in% c(1, 2, 12)) %>% 
-  distinct(EntrezID, .keep_all = TRUE) %>% 
-  filter(!is.na(EntrezID))
-
-
-
 #1. Intestine
-score.candidates(results.int.dir, candidate.genes = DEG.chr.1.2.12[["EntrezID"]])
+score.candidates(results.int.dir, candidate.genes = DEG.chr$EntrezID)
 
 #2. Hemolymphoid
-score.candidates(results.hemo.dir, candidate.genes = DEG.all$EntrezID)
+score.candidates(results.hemo.dir, candidate.genes = DEG.chr$EntrezID)
 ```
 
+## VII.   Integrate Gene Information with SVM Output
 
-
-
-
-
-## VI.   Integrate Gene Information with SVM Output
 We integrated the SVM scores and FP Rates with the original gene information (DEG.all). The function merge.gene.svm.fp takes the original gene table (DEG.all) and adds the columns for the mean SVM score and mean FP rate to the genes. It writes out a table for each module with the information for each gene, including the original information from the gene table (entrez ID, gene name, expression p-values, position data, etc.), SVM score, and FP rate (Candidate.Gene.Results.rds). 
 ```{r merge_info}
 #gene.column.name is the column name from the gene.info.table with the entrez IDs
 
 #1. Intestine
-int.final.table <- merge.gene.svm.fp(results.hipp.dir, FEHS_allgenes, gene.column.name = "GENE")
+int.final.table <- merge.gene.svm.fp(results.int.dir, gene.info.table = DEG.chr, gene.column.name = "EntrezID")
 
 #2. Hemolymphoid
-hemo.final.table <- merge.gene.svm.fp(results.temp.dir, FEHS_allgenes, gene.column.name = "GENE")
+hemo.final.table <- merge.gene.svm.fp(results.hemo.dir, gene.info.table = DEG.chr, gene.column.name = "EntrezID")
+```
+
+## VIII.  Gene Scores
+
+Each gene is scored based on the integration of SVM false positive (FP) rates, GWAS p-values, and potentially other metrics given the dataset (e.g., expression data). Given two variables (i.e., -log p-value and -log SVM FP rate), the score is based on the number of genes in the area covered by its x,y position. An individual gene with a lot of genes covered in their area will be ranked higher than a gene with fewer. Given only positional information and SVM output, genes can be ranked on their FP rates and mapped by their position (and significant GWAS genes can also be designated from the rest). 
+
+A. Log transformation
+```{r gene_value_transformation}
+#Here, there are five p-values corresponding to five cell types for this DEG dataset. Each will be log transformed and scaled to 1. 
+
+#1. Intestine
+int.final.table %<>%
+  mutate(APC.log_p    = -log10(APCpv), 
+         BCELL.log_p  = -log10(BCELLpv),
+         CD4.log_p    = -log10(CD4pv), 
+         CD8.log_p    = -log10(CD8pv), 
+         TREG.log_p   = -log10(TREGpv),
+         #FP rates
+         log_fp = -log10(mean.fp.rate))
+
+#2. Hemolymphoid 
+hemo.final.table %<>%
+  mutate(APC.log_p    = -log10(APCpv), 
+         BCELL.log_p  = -log10(BCELLpv),
+         CD4.log_p    = -log10(CD4pv), 
+         CD8.log_p    = -log10(CD8pv), 
+         TREG.log_p   = -log10(TREGpv),
+         #FP rates
+         log_fp = -log10(mean.fp.rate))
+```
+
+B. Score calculation
+Final DEG/SVM prioritization gene score is calculated as follows: for every gene in the -log p-value x -log SVM FP rate plot, how many genes are in the are covered by its position. Individual genes with more (other) genes in their positional box will be ranked higher as they dominate more of the genes contained in the plot. This calculation maximizes both measures for a single gene. (note: this score incorporates non-significant values in the chromosome, but the plots will be significant genes only)
+```{r score}
+#1. Intestine
+int.final.table %<>% 
+  mutate(total.score = )
+
+
+#2. Hemolymphoid
+
+
+for(i in 1:length(final.tableTRANS$entrezgene)){
+  final.tableTRANS$BetterThan[[i]] <- length(intersect(final.tableTRANS$entrezgene[final.tableTRANS$Mean.FP.Rate < final.tableTRANS$Mean.FP.Rate[[i]]],
+               final.tableTRANS$entrezgene[final.tableTRANS$APCpv < final.tableTRANS$APCpv[[i]]]))
+}
 ```
 
 
 
 
+## IX.   Plot value preparation
+```{r}
+#1. Intestine
+int.final.table %<>%
+  mutate(APC.log_p    = -log10(APCpv), 
+         BCELL.log_p  = -log10(BCELLpv),
+         CD4.log_p    = -log10(CD4pv), 
+         CD8.log_p    = -log10(CD8pv), 
+         TREG.log_p   = -log10(TREGpv),
+         #scaled
+         APC.log_p1   = APC.log_p/max(APC.log_p),
+         BCELL.log_p1 = BCELL.log_p/max(BCELL.log_p),
+         CD4.log_p1   = CD4.log_p/max(CD4.log_p),
+         CD8.log_p1   = CD8.log_p/max(CD8.log_p),
+         TREG.log_p1  = TREG.log_p/max(TREG.log_p),
+         #FP rates
+         log_fp = -log10(mean.fp.rate),
+         log_fp1 = log_fp/max(log_fp)) 
 
-
-
-
-
-
-
-
-## III. Apply the trained models to DEG candidates (from cell differential expression data)
-Use SVM to classify each gene, where each gene recieves a score from each SVM indicating whether the model identifies
-it at part of the gene list (a positive score) or not part of the gene list (a negative score).
-
-Score.candidates function writes out all values to two csv tables (Candidate.Gene.SVM.Scores.csv and Candidate.Gene.FP.Rates.csv). 
-(the function also plots boxplots of the distributions of the SVM scores and the FP rates for each candidate gene in two jpgs (Candidate.Gene.SVM.Scores.jpg, and Candidate.Gene.FP.Rates.jpg). These plots are ordered by mean value.
-
-The genes that are on the left are classified confidently by the SVM as being related to the IBD gene list. The distributions of their SVM scores do not cross 0.
-The genes on the right hand side are classified confidently by the SVM as not being related to the IBD gene list. 
-The genes in between are less confidently classified across the SVM trials. 
-
-```{r score candidates}
-#change - want to score ALL GENES from chr 1 and 2, but will only plot significant. but will use the number of genes within the box to determine ranking instead of final score
-
-#CELL 1
-#SWITCH - using DEGapc (etc.) not SIG now
-score.candidates(results.dir, candidate.genes = as.character(DEGapc[["Entrez Gene ID"]]))
-#include_graphics(normalizePath(paste0(module.dir[1], "/Candidate.Gene.SVM.Scores.jpg")))
-#some get lost
-
-#CELL 2
-score.candidates(results2.dir, candidate.genes = as.character(DEGbcell[["Entrez Gene ID"]]))
-
-#CELL 3
-score.candidates(results3.dir, candidate.genes = as.character(DEGcd4[["Entrez Gene ID"]]))
-
-#CELL 4
-score.candidates(results4.dir, candidate.genes = as.character(DEGcd8[["Entrez Gene ID"]]))
-
-#CELL 5
-score.candidates(results5.dir, candidate.genes = as.character(DEGtreg[["Entrez Gene ID"]]))
+#2. Hemolymphoid 
+hemo.final.table %<>%
+  mutate(APC.log_p    = -log10(APCpv), 
+         BCELL.log_p  = -log10(BCELLpv),
+         CD4.log_p    = -log10(CD4pv), 
+         CD8.log_p    = -log10(CD8pv), 
+         TREG.log_p   = -log10(TREGpv),
+         #scaled
+         APC.log_p1   = APC.log_p/max(APC.log_p),
+         BCELL.log_p1 = BCELL.log_p/max(BCELL.log_p),
+         CD4.log_p1   = CD4.log_p/max(CD4.log_p),
+         CD8.log_p1   = CD8.log_p/max(CD8.log_p),
+         TREG.log_p1  = TREG.log_p/max(TREG.log_p),
+         #FP rates
+         log_fp = -log10(mean.fp.rate),
+         log_fp1 = log_fp/max(log_fp)) 
 ```
 
 
 
-
-## IV. Merge SVM with expression data (use this instead of the two functions)
-
-We need to merge the SVM scores and FP rates with expression data for each gene. 
-
-The original merge.svm.gene.info function uses the downloaded gene information from biomart to assign gene names and positions to each of the entrez gene IDs with an SVM score. 
-It writes out a table for each module with information about each gene, its name, genomic coordinates, and SVM score and FP rate for each module (Candidate.Gene.Results.csv). 
-It also plots the gene names on two axes. The x axis is the genomic position, and the y axis is the SVM score (Candidate.Gene.SVM.Results.jpg).
-
-```{r merge SVM results with DEG}
-#first have to create a column called entrezgene in each of the DEG tables because the function merge.svm.gene.info requires this column name, but i didn't want to change the original entrez id column name because we used that previously for the SVM scores
-DEGapc$entrezgene <- as.character(DEGapc$`Entrez Gene ID`)
-DEGbcell$entrezgene <- as.character(DEGbcell$`Entrez Gene ID`)
-DEGcd4$entrezgene <- as.character(DEGcd4$`Entrez Gene ID`)
-DEGcd8$entrezgene <- as.character(DEGcd8$`Entrez Gene ID`)
-DEGtreg$entrezgene <- as.character(DEGtreg$`Entrez Gene ID`)
-
-##error in using merge.svm.gene.info function, so take out the needed parts and then have to separate into five different cells (and rework to fit in the type of thing that the DEG tables are)
-#also need entire first section each time because have five different results folders for each cell (because of reasons above)
-
-#CELL 1 MERGE
-#merge.svm.gene.info(results.dir, DEGapc)
-
-module.dir.info <- get.module.dir(results.dir, dir.table = TRUE)
-  module.dir <- module.dir.info$module.dir
-  dir.table <- module.dir.info$dir.table
-  
-  all.results <- vector(mode = "list", length = length(module.dir))
-  names(all.results) <- dir.table[,2]
-  
-    svm.csv.file <- paste0(module.dir, "/Candidate.Gene.SVM.Scores.csv")
-    fp.csv.file <- paste0(module.dir, "/Candidate.Gene.FP.Rates.csv")
-    results.file <- paste0(module.dir, "/Candidate.Gene.Results.csv")
-    plot.file <- paste0(module.dir, "/Candidate.Gene.SVM.Results.jpg")
-    
-    svm.scores <- read.csv(svm.csv.file, stringsAsFactors = FALSE)
-    mean.svm <- colMeans(svm.scores)
-    gene.ids <- gsub("X", "", colnames(svm.scores))
-    
-    fp.rates <- read.csv(fp.csv.file, stringsAsFactors = FALSE)
-    mean.fp <- colMeans(fp.rates)
-    
-  #MKL now using gene.info.table in the original, but had to change to the actual input that would have gone in the function (which is DEGapc for cell 1 etc.)  
-    # MKL had to use as.character(DEGapc[["entrezgene"]]) to make it the same type of thing as gene.infor.table[,"entrezgene"]
-    common.genes <- intersect(as.character(DEGapc[["entrezgene"]]), gene.ids)
-    gene.locale.table <- match(common.genes, as.character(DEGapc[["entrezgene"]]))
-    # head(cbind(gene.ids, gene.info.table[gene.locale.table,]))
-    gene.locale.svm <- match(common.genes, gene.ids)
-    # head(cbind(common.genes, gene.ids[gene.locale.svm]))
-    
-    final.table <- cbind(data.frame(DEGapc)[gene.locale.table,], mean.svm[gene.locale.svm], mean.fp[gene.locale.svm])
-    #MKL had to change columns to 59 and 60
-    colnames(final.table)[c(74,75)] <- c("Mean.SVM.Score", "Mean.FP.Rate")
-    
-    write.table(final.table, results.file, sep = ",", quote = FALSE, row.names = FALSE)
-    
-##use final.table for cell 1
+## X.    Plotting Integrated Ranking
 
 
 
 
-#CELL 2
-#merge.svm.gene.info(results2.dir, DEGbcell)
 
 
-module.dir.info <- get.module.dir(results2.dir, dir.table = TRUE)
-  module.dir <- module.dir.info$module.dir
-  dir.table <- module.dir.info$dir.table
-  
-  all.results <- vector(mode = "list", length = length(module.dir))
-  names(all.results) <- dir.table[,2]
-  
-    svm.csv.file <- paste0(module.dir, "/Candidate.Gene.SVM.Scores.csv")
-    fp.csv.file <- paste0(module.dir, "/Candidate.Gene.FP.Rates.csv")
-    results.file <- paste0(module.dir, "/Candidate.Gene.Results.csv")
-    plot.file <- paste0(module.dir, "/Candidate.Gene.SVM.Results.jpg")
-    
-    svm.scores <- read.csv(svm.csv.file, stringsAsFactors = FALSE)
-    mean.svm <- colMeans(svm.scores)
-    gene.ids <- gsub("X", "", colnames(svm.scores))
-    
-    fp.rates <- read.csv(fp.csv.file, stringsAsFactors = FALSE)
-    mean.fp <- colMeans(fp.rates)
-    
-    #MKL now using gene.info.table in the original, but had to change to the actual input that would have gone in the function (which is DEGapc   for cell 1 etc.)  
-    # MKL had to use as.character(DEGapc[["entrezgene"]]) to make it the same type of thing as gene.infor.table[,"entrezgene"]
-    common.genes2 <- intersect(as.character(DEGbcell[["entrezgene"]]), gene.ids)
-    gene.locale.table2 <- match(common.genes2, as.character(DEGbcell[["entrezgene"]]))
-    # head(cbind(gene.ids, gene.info.table[gene.locale.table,]))
-    gene.locale.svm2 <- match(common.genes2, gene.ids)
-    # head(cbind(common.genes, gene.ids[gene.locale.svm]))
-    
-    final.table2 <- cbind(data.frame(DEGbcell)[gene.locale.table2,], mean.svm[gene.locale.svm2], mean.fp[gene.locale.svm2])
-    #MKL had to change columns to 59 and 60
-    colnames(final.table2)[c(74,75)] <- c("Mean.SVM.Score", "Mean.FP.Rate")
-    
-    write.table(final.table2, results.file, sep = ",", quote = FALSE, row.names = FALSE)
 
-    
-    
-#CELL 3
-#merge.svm.gene.info(results3.dir, DEGcd4)
 
-module.dir.info <- get.module.dir(results3.dir, dir.table = TRUE)
-  module.dir <- module.dir.info$module.dir
-  dir.table <- module.dir.info$dir.table
-  
-  all.results <- vector(mode = "list", length = length(module.dir))
-  names(all.results) <- dir.table[,2]
-  
-    svm.csv.file <- paste0(module.dir, "/Candidate.Gene.SVM.Scores.csv")
-    fp.csv.file <- paste0(module.dir, "/Candidate.Gene.FP.Rates.csv")
-    results.file <- paste0(module.dir, "/Candidate.Gene.Results.csv")
-    plot.file <- paste0(module.dir, "/Candidate.Gene.SVM.Results.jpg")
-    
-    svm.scores <- read.csv(svm.csv.file, stringsAsFactors = FALSE)
-    mean.svm <- colMeans(svm.scores)
-    gene.ids <- gsub("X", "", colnames(svm.scores))
-    
-    fp.rates <- read.csv(fp.csv.file, stringsAsFactors = FALSE)
-    mean.fp <- colMeans(fp.rates)
-    
-   #MKL now using gene.info.table in the original, but had to change to the actual input that would have gone in the function (which is DEGapc    for cell 1 etc.)  
-    # MKL had to use as.character(DEGapc[["entrezgene"]]) to make it the same type of thing as gene.infor.table[,"entrezgene"]
-    common.genes3 <- intersect(as.character(DEGcd4[["entrezgene"]]), gene.ids)
-    gene.locale.table3 <- match(common.genes3, as.character(DEGcd4[["entrezgene"]]))
-    # head(cbind(gene.ids, gene.info.table[gene.locale.table,]))
-    gene.locale.svm3 <- match(common.genes3, gene.ids)
-    # head(cbind(common.genes, gene.ids[gene.locale.svm]))
-    
-    final.table3 <- cbind(data.frame(DEGcd4)[gene.locale.table3,], mean.svm[gene.locale.svm3], mean.fp[gene.locale.svm3])
-    #MKL had to change columns to 59 and 60
-    colnames(final.table3)[c(74,75)] <- c("Mean.SVM.Score", "Mean.FP.Rate")
-    
-    write.table(final.table3, results.file, sep = ",", quote = FALSE, row.names = FALSE)
-    
-    
-    
-#CELL 4
-#merge.svm.gene.info(results4.dir, DEGcd8)
-    
-module.dir.info <- get.module.dir(results4.dir, dir.table = TRUE)
-  module.dir <- module.dir.info$module.dir
-  dir.table <- module.dir.info$dir.table
-  
-  all.results <- vector(mode = "list", length = length(module.dir))
-  names(all.results) <- dir.table[,2]
-  
-    svm.csv.file <- paste0(module.dir, "/Candidate.Gene.SVM.Scores.csv")
-    fp.csv.file <- paste0(module.dir, "/Candidate.Gene.FP.Rates.csv")
-    results.file <- paste0(module.dir, "/Candidate.Gene.Results.csv")
-    plot.file <- paste0(module.dir, "/Candidate.Gene.SVM.Results.jpg")
-    
-    svm.scores <- read.csv(svm.csv.file, stringsAsFactors = FALSE)
-    mean.svm <- colMeans(svm.scores)
-    gene.ids <- gsub("X", "", colnames(svm.scores))
-    
-    fp.rates <- read.csv(fp.csv.file, stringsAsFactors = FALSE)
-    mean.fp <- colMeans(fp.rates)
-    
-  #MKL now using gene.info.table in the original, but had to change to the actual input that would have gone in the function (which is DEGapc for cell 1 etc.)  
-    # MKL had to use as.character(DEGapc[["entrezgene"]]) to make it the same type of thing as gene.infor.table[,"entrezgene"]
-    common.genes4 <- intersect(as.character(DEGcd8[["entrezgene"]]), gene.ids)
-    gene.locale.table4 <- match(common.genes4, as.character(DEGcd8[["entrezgene"]]))
-    # head(cbind(gene.ids, gene.info.table[gene.locale.table,]))
-    gene.locale.svm4 <- match(common.genes4, gene.ids)
-    # head(cbind(common.genes, gene.ids[gene.locale.svm]))
-    
-    final.table4 <- cbind(data.frame(DEGcd8)[gene.locale.table4,], mean.svm[gene.locale.svm4], mean.fp[gene.locale.svm4])
-    #MKL had to change columns to 59 and 60
-    colnames(final.table4)[c(74,75)] <- c("Mean.SVM.Score", "Mean.FP.Rate")
-    
-    write.table(final.table4, results.file, sep = ",", quote = FALSE, row.names = FALSE)
 
-#CELL 5
-#merge.svm.gene.info(results5.dir, DEGtreg)
 
-module.dir.info <- get.module.dir(results5.dir, dir.table = TRUE)
-  module.dir <- module.dir.info$module.dir
-  dir.table <- module.dir.info$dir.table
-  
-  all.results <- vector(mode = "list", length = length(module.dir))
-  names(all.results) <- dir.table[,2]
-  
-    svm.csv.file <- paste0(module.dir, "/Candidate.Gene.SVM.Scores.csv")
-    fp.csv.file <- paste0(module.dir, "/Candidate.Gene.FP.Rates.csv")
-    results.file <- paste0(module.dir, "/Candidate.Gene.Results.csv")
-    plot.file <- paste0(module.dir, "/Candidate.Gene.SVM.Results.jpg")
-    
-    svm.scores <- read.csv(svm.csv.file, stringsAsFactors = FALSE)
-    mean.svm <- colMeans(svm.scores)
-    gene.ids <- gsub("X", "", colnames(svm.scores))
-    
-    fp.rates <- read.csv(fp.csv.file, stringsAsFactors = FALSE)
-    mean.fp <- colMeans(fp.rates)
-    
-  #MKL now using gene.info.table in the original, but had to change to the actual input that would have gone in the function (which is DEGapc for cell 1 etc.)  
-    # MKL had to use as.character(DEGapc[["entrezgene"]]) to make it the same type of thing as gene.infor.table[,"entrezgene"]
-    common.genes5 <- intersect(as.character(DEGtreg[["entrezgene"]]), gene.ids)
-    gene.locale.table5 <- match(common.genes5, as.character(DEGtreg[["entrezgene"]]))
-    # head(cbind(gene.ids, gene.info.table[gene.locale.table,]))
-    gene.locale.svm5 <- match(common.genes5, gene.ids)
-    # head(cbind(common.genes, gene.ids[gene.locale.svm]))
-    
-    final.table5 <- cbind(data.frame(DEGtreg)[gene.locale.table5,], mean.svm[gene.locale.svm5], mean.fp[gene.locale.svm5])
-    #MKL had to change columns to 59 and 60
-    colnames(final.table5)[c(74,75)] <- c("Mean.SVM.Score", "Mean.FP.Rate")
-    
-    write.table(final.table5, results.file, sep = ",", quote = FALSE, row.names = FALSE)
 
-```
+
 
 
 
