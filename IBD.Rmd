@@ -575,9 +575,37 @@ int.Ccc1.final.table <- merge.gene.svm.fp(results.Ccc1.int.dir, gene.info.table 
 hemo.Ccc1.final.table <- merge.gene.svm.fp(results.Ccc1.hemo.dir, gene.info.table = DEG.Ccc1, gene.column.name = "EntrezID.x")
 ```
 
-```{r}
-DEG.all
-Ccc1.gene.info
+C. Table prep for plot
+```{r Ccc1_table}
+#1. intestine
+int.Ccc1.final.table %<>% select(Symbol, APCpv, BCELLpv, CD4pv, CD8pv, TREGpv, start_position.y, end_position.y, mean.fp.rate) %>% 
+  drop_na() %>% 
+  rename(int.mean.fp = mean.fp.rate)
+#2. hemolymphoid
+hemo.Ccc1.final.table %<>% select(Symbol, APCpv, BCELLpv, CD4pv, CD8pv, TREGpv, start_position.y, end_position.y, mean.fp.rate) %>% 
+  drop_na() %>% 
+  rename(hemo.mean.fp = mean.fp.rate)
+
+#join tables, find min pv, and calculate log10 and mean.gene.position (note: found min non-zero pv beforehand - min($pv[$pv!=0]))
+Ccc1.final.table <- left_join(int.Ccc1.final.table, hemo.Ccc1.final.table, by = "Symbol")
+Ccc1.final.table %<>% 
+  mutate(minpv = pmin(APCpv.x, BCELLpv.x, CD4pv.x, CD8pv.x, TREGpv.x),
+         minpv = replace(minpv, which(minpv == 0), 10^(-37)),
+         logpv = -log10(minpv),
+         logpv1 = logpv/max(logpv), 
+         int.logfp = -log10(int.mean.fp),
+         hemo.logfp = -log10(hemo.mean.fp),
+         int.logfp1 = int.logfp/max(int.logfp), 
+         hemo.logfp1 = hemo.logfp/max(hemo.logfp)) %>% 
+  rowwise() %>% 
+  mutate(mean.gene.position = mean(c(start_position.y.x, end_position.y.x), na.rm = FALSE)) %>% 
+  ungroup()
+```
+
+D. Plot
+```{r Ccc1_plot}
+IBD_Ccc1_plotr(Ccc1.final.table)
+ggsave("Ccc1_plot.svg", path = figures.dir, height = 10, width = 10, units = "in")
 ```
 
 
