@@ -66,7 +66,7 @@ conflict_prefer("filter", "dplyr")
 B. Directory setup
 ```{r setup_dir}
 project.dir <- here()
-code.dir <- here("Code")
+code.dir <- here("Codes")
 data.dir <- here("Data")
 results.int.dir <- here("Results_int")
 results.hemo.dir <- here("Results_hemo")
