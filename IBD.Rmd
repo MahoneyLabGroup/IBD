@@ -25,6 +25,10 @@ VII.  Integrate Gene Information with SVM Output
 VIII. Gene Scores
 IX.   Plot value preparation
 X.    Plotting Integrated Ranking
+XI.   Heatmap tables
+XII.  Heatmaps
+XIII. Ccc1 locus
+XIV.  Supplementals/other
 
 ## I. Project Setup
 
@@ -39,6 +43,7 @@ all.packages <- c("tidyverse",
                   "R.utils", 
                   "doParallel", 
                   "gprofiler2", 
+                  "e1071",
                   "DescTools", 
                   "knitr",
                   "igraph",
@@ -49,7 +54,11 @@ all.packages <- c("tidyverse",
                   "plotly",
                   "forcats", 
                   "magrittr",
-                  "e1071")
+                  "rPref",
+                  "lazyeval",
+                  "rlang",
+                  "reshape2",
+                  "cowplot")
 for(i in 1:length(all.packages)){library(all.packages[i], character.only = TRUE)} 
 conflict_prefer("filter", "dplyr")
 ```
@@ -61,6 +70,7 @@ code.dir <- here("Code")
 data.dir <- here("Data")
 results.int.dir <- here("Results_int")
 results.hemo.dir <- here("Results_hemo")
+figures.dir <- here("Figures")
 ```
 
 C. Source the code used in the project
@@ -120,14 +130,20 @@ DEG.all.original <- read_excel(here("Data", "DE_genes", "Full microarray for Mat
 
 #cleanup (NOTE: this is specific to this excel file with the DEGs, and this cleanup will have duplicates because of the nature of the expression data - ie, we won't remove duplicates at this point because lowest expression p values may be in different observations for each immune cell and cleaner filtering can happen later)
 DEG.all <- DEG.all.original %>% 
-              rename(APCpv = `stepup(p-value(PWD * APCs vs. B6 * APCs))`, 
-                     BCELLpv = `stepup(p-value(PWD * Bcells vs. B6 * Bcells))`, 
-                     CD4pv = `stepup(p-value(PWD * CD4 vs. B6 * CD4))`, 
-                     CD8pv = `stepup(p-value(PWD * CD8 vs. B6 * CD8))`, 
-                     TREGpv = `stepup(p-value(PWD * Tregs vs. B6 * Tregs))`,
+              rename(APCpv    = `stepup(p-value(PWD * APCs vs. B6 * APCs))`, 
+                     BCELLpv  = `stepup(p-value(PWD * Bcells vs. B6 * Bcells))`, 
+                     CD4pv    = `stepup(p-value(PWD * CD4 vs. B6 * CD4))`, 
+                     CD8pv    = `stepup(p-value(PWD * CD8 vs. B6 * CD8))`, 
+                     TREGpv   = `stepup(p-value(PWD * Tregs vs. B6 * Tregs))`,
                      EntrezID = `Entrez Gene ID`,
-                     Symbol = `NEW Symbol`) %>% 
-              select(Symbol, EntrezID, Chr, APCpv, BCELLpv, CD4pv, CD8pv, TREGpv) %>% 
+                     Symbol   = `NEW Symbol`,
+                     APCfc    = `Fold-Change(PWD * APCs vs. B6 * APCs)`,
+                     BCELLfc  = `Fold-Change(PWD * Bcells vs. B6 * Bcells)`,
+                     CD4fc    = `Fold-Change(PWD * CD4 vs. B6 * CD4)`,
+                     CD8fc    = `Fold-Change(PWD * CD8 vs. B6 * CD8)`,
+                     TREGfc   = `Fold-Change(PWD * Tregs vs. B6 * Tregs)`) %>% 
+              select(Symbol, EntrezID, Chr, APCpv, BCELLpv, CD4pv, CD8pv, TREGpv, 
+                     APCfc, BCELLfc, CD4fc, CD8fc, TREGfc) %>% 
               mutate(across(starts_with("EntrezID"), as.character))
 ```
 
@@ -269,7 +285,7 @@ hemo.final.table <- merge.gene.svm.fp(results.hemo.dir, gene.info.table = DEG.ch
 Each gene is scored based on the integration of SVM false positive (FP) rates, GWAS p-values, and potentially other metrics given the dataset (e.g., expression data). Given two variables (i.e., -log p-value and -log SVM FP rate), the score is based on the number of genes in the area covered by its x,y position. An individual gene with a lot of genes covered in their area will be ranked higher than a gene with fewer. Given only positional information and SVM output, genes can be ranked on their FP rates and mapped by their position (and significant GWAS genes can also be designated from the rest). 
 
 A. Log transformation
-```{r gene_value_transformation}
+```{r log_transformation}
 #Here, there are five p-values corresponding to five cell types for this DEG dataset. Each will be log transformed and scaled to 1. 
 
 #1. Intestine
@@ -296,1690 +312,272 @@ hemo.final.table %<>%
 B. Score calculation
 Final DEG/SVM prioritization gene score is calculated as follows: for every gene in the -log p-value x -log SVM FP rate plot, how many genes are in the are covered by its position. Individual genes with more (other) genes in their positional box will be ranked higher as they dominate more of the genes contained in the plot. This calculation maximizes both measures for a single gene. (note: this score incorporates non-significant values in the chromosome, but the plots will be significant genes only)
 ```{r score}
+#the "total.score" value will be the number of genes that the individual gene performs better than in both p-value and FP rate (for all the genes in the "final.table," which have been previously filtered by chromosome 1 and 2)
 #1. Intestine
 int.final.table %<>% 
-  mutate(total.score = )
-
+  rowwise() %>% 
+  mutate(APC.total.score   = sum(APC.log_p > .$APC.log_p & log_fp > .$log_fp),
+         BCELL.total.score = sum(BCELL.log_p > .$BCELL.log_p & log_fp > .$log_fp),
+         CD4.total.score   = sum(CD4.log_p > .$CD4.log_p & log_fp > .$log_fp), 
+         CD8.total.score   = sum(CD8.log_p > .$CD8.log_p & log_fp > .$log_fp), 
+         TREG.total.score  = sum(TREG.log_p > .$TREG.log_p & log_fp > .$log_fp)) %>% 
+  ungroup()
 
 #2. Hemolymphoid
-
-
-for(i in 1:length(final.tableTRANS$entrezgene)){
-  final.tableTRANS$BetterThan[[i]] <- length(intersect(final.tableTRANS$entrezgene[final.tableTRANS$Mean.FP.Rate < final.tableTRANS$Mean.FP.Rate[[i]]],
-               final.tableTRANS$entrezgene[final.tableTRANS$APCpv < final.tableTRANS$APCpv[[i]]]))
-}
+hemo.final.table %<>% 
+  rowwise() %>% 
+  mutate(APC.total.score   = sum(APC.log_p > .$APC.log_p & log_fp > .$log_fp),
+         BCELL.total.score = sum(BCELL.log_p > .$BCELL.log_p & log_fp > .$log_fp),
+         CD4.total.score   = sum(CD4.log_p > .$CD4.log_p & log_fp > .$log_fp), 
+         CD8.total.score   = sum(CD8.log_p > .$CD8.log_p & log_fp > .$log_fp), 
+         TREG.total.score  = sum(TREG.log_p > .$TREG.log_p & log_fp > .$log_fp)) %>% 
+  ungroup()
 ```
-
-
-
 
 ## IX.   Plot value preparation
-```{r}
-#1. Intestine
-int.final.table %<>%
-  mutate(APC.log_p    = -log10(APCpv), 
-         BCELL.log_p  = -log10(BCELLpv),
-         CD4.log_p    = -log10(CD4pv), 
-         CD8.log_p    = -log10(CD8pv), 
-         TREG.log_p   = -log10(TREGpv),
-         #scaled
-         APC.log_p1   = APC.log_p/max(APC.log_p),
-         BCELL.log_p1 = BCELL.log_p/max(BCELL.log_p),
-         CD4.log_p1   = CD4.log_p/max(CD4.log_p),
-         CD8.log_p1   = CD8.log_p/max(CD8.log_p),
-         TREG.log_p1  = TREG.log_p/max(TREG.log_p),
-         #FP rates
-         log_fp = -log10(mean.fp.rate),
-         log_fp1 = log_fp/max(log_fp)) 
 
-#2. Hemolymphoid 
-hemo.final.table %<>%
-  mutate(APC.log_p    = -log10(APCpv), 
-         BCELL.log_p  = -log10(BCELLpv),
-         CD4.log_p    = -log10(CD4pv), 
-         CD8.log_p    = -log10(CD8pv), 
-         TREG.log_p   = -log10(TREGpv),
-         #scaled
-         APC.log_p1   = APC.log_p/max(APC.log_p),
-         BCELL.log_p1 = BCELL.log_p/max(BCELL.log_p),
-         CD4.log_p1   = CD4.log_p/max(CD4.log_p),
-         CD8.log_p1   = CD8.log_p/max(CD8.log_p),
-         TREG.log_p1  = TREG.log_p/max(TREG.log_p),
-         #FP rates
-         log_fp = -log10(mean.fp.rate),
-         log_fp1 = log_fp/max(log_fp)) 
+The following tables were created with various filters and values to be plotted. Final scores have already been calculated, and any filtering done here is for visualization purposes only. Each cell type requires its own table to be able to scale properly
+A. Filter significant p-values for each cell type, and scale log values for each SIG table
+```{r sigFilter_and_scale}
+# 1. Intestine
+APC.SIG.int.final.table <- IBD.sigfilter.scale(final.table = int.final.table, pval.col = "APCpv", logpv.col = "APC.log_p")
+BCELL.SIG.int.final.table <- IBD.sigfilter.scale(final.table = int.final.table, pval.col = "BCELLpv", logpv.col = "BCELL.log_p")
+CD4.SIG.int.final.table <- IBD.sigfilter.scale(final.table = int.final.table, pval.col = "CD4pv", logpv.col = "CD4.log_p")
+CD8.SIG.int.final.table <- IBD.sigfilter.scale(final.table = int.final.table, pval.col = "CD8pv", logpv.col = "CD8.log_p")
+TREG.SIG.int.final.table <- IBD.sigfilter.scale(final.table = int.final.table, pval.col = "TREGpv", logpv.col = "TREG.log_p")
+
+# 2. Hemolymphoid
+APC.SIG.hemo.final.table <- IBD.sigfilter.scale(final.table = hemo.final.table, pval.col = "APCpv", logpv.col = "APC.log_p")
+BCELL.SIG.hemo.final.table <- IBD.sigfilter.scale(final.table = hemo.final.table, pval.col = "BCELLpv", logpv.col = "BCELL.log_p")
+CD4.SIG.hemo.final.table <- IBD.sigfilter.scale(final.table = hemo.final.table, pval.col = "CD4pv", logpv.col = "CD4.log_p")
+CD8.SIG.hemo.final.table <- IBD.sigfilter.scale(final.table = hemo.final.table, pval.col = "CD8pv", logpv.col = "CD8.log_p")
+TREG.SIG.hemo.final.table <- IBD.sigfilter.scale(final.table = hemo.final.table, pval.col = "TREGpv", logpv.col = "TREG.log_p")
 ```
 
+B. Pareto front and top genes for each cell type
+```{r Pareto_genes}
+#1. Intestine
+APC.int.pref <- psel(APC.SIG.int.final.table, high(log_p1) * (high(log_fp1)))
+BCELL.int.pref <- psel(BCELL.SIG.int.final.table, high(log_p1) * (high(log_fp1)))
+CD4.int.pref <- psel(CD4.SIG.int.final.table, high(log_p1) * (high(log_fp1)))
+CD8.int.pref <- psel(CD8.SIG.int.final.table, high(log_p1) * (high(log_fp1)))
+TREG.int.pref <- psel(TREG.SIG.int.final.table, high(log_p1) * (high(log_fp1)))
 
+#2. Hemolymphoid 
+APC.hemo.pref <- psel(APC.SIG.hemo.final.table, high(log_p1) * (high(log_fp1)))
+BCELL.hemo.pref <- psel(BCELL.SIG.hemo.final.table, high(log_p1) * (high(log_fp1)))
+CD4.hemo.pref <- psel(CD4.SIG.hemo.final.table, high(log_p1) * (high(log_fp1)))
+CD8.hemo.pref <- psel(CD8.SIG.hemo.final.table, high(log_p1) * (high(log_fp1)))
+TREG.hemo.pref <- psel(TREG.SIG.hemo.final.table, high(log_p1) * (high(log_fp1)))
+```
+
+```{r top10_genes}
+#1. Intestine
+APC.int.top10 <- APC.SIG.int.final.table %>% slice_max(APC.total.score, n = 10)
+BCELL.int.top10 <- BCELL.SIG.int.final.table %>% slice_max(BCELL.total.score, n = 10)
+CD4.int.top10 <- CD4.SIG.int.final.table %>% slice_max(CD4.total.score, n = 10)
+CD8.int.top10 <- CD8.SIG.int.final.table %>% slice_max(CD8.total.score, n = 10)
+TREG.int.top10 <- TREG.SIG.int.final.table %>% slice_max(TREG.total.score, n = 10)
+
+#2. Hemolymphoid 
+APC.hemo.top10 <- APC.SIG.hemo.final.table %>% slice_max(APC.total.score, n = 10)
+BCELL.hemo.top10 <- BCELL.SIG.hemo.final.table %>% slice_max(BCELL.total.score, n = 10)
+CD4.hemo.top10 <- CD4.SIG.hemo.final.table %>% slice_max(CD4.total.score, n = 10)
+CD8.hemo.top10 <- CD8.SIG.hemo.final.table %>% slice_max(CD8.total.score, n = 10)
+TREG.hemo.top10 <- TREG.SIG.hemo.final.table %>% slice_max(TREG.total.score, n = 10)
+```
 
 ## X.    Plotting Integrated Ranking
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-##create subset lists from final.table that represent only significant p values for that cell
-```{r subset SIG p values from final.table}
-#CELL 1
-final.tableSIG <- 
-  final.table %>%
-  filter(APCpv < 0.05) #take only significant p values
-  
-#CELL 2
-final.table2SIG <- 
-  final.table2 %>%
-  filter(BCELLpv < 0.05)
-
-#CELL 3
-final.table3SIG <- 
-  final.table3 %>%
-  filter(CD4pv < 0.05)
-
-#CELL 4
-final.table4SIG <- 
-  final.table4 %>%
-  filter(CD8pv < 0.05)
-
-#CELL 5
-final.table5SIG <- 
-  final.table5 %>%
-  filter(TREGpv < 0.05)
-
-#note - numbers should more or less match when SWITCH happened, to filter by significant p value before classifying. not all genes can be classified though, so the final.tables will have slightly less
+1. Intestine
+```{r APC_int_plot}
+IBD_gene_plotr(SIG.final.table = APC.SIG.int.final.table, pref = APC.int.pref, top10 = APC.int.top10, 
+               data.genename.col = "Symbol", pref.genename.col = "Symbol", top10.genename.col = "Symbol", 
+               x.pv.col = "log_p1", y.fpr.col = "log_fp1", title = "APC")
+ggsave("APC_int.svg", path = figures.dir, height = 10, width = 10, units = "in")
 ```
 
-
-
-
-
-## V. NEW RANKING SYSTEM and PLOT
-
-
-## CELL 1
-
-instead of having the final ranking be the SVM FP rate PLUS the p-value, we will use the following metric: 
-for every gene in the -log p-value x -log SVM FP rate plot, how many genes are in the area covered by its position. individual genes with more (other) genes in their area box will be ranked higher as they dominate more of the genes contained in the plot
-
-```{r rank cell 1}
-##CREATE NEW TABLES FIRST - containing -log fp, -log pvalue, symbol, and number dominating
-##this chunk is also overlapping with the V. PLOT chunks ## DO NOT RUN THOSE RIGHT NOW
-
-# note- FINAL.TABLE is all the genes without duplicates from chr 1 and 2, the FINAL.TABLESIG are just the genes FROM THAT CELL TYPE that have significant p values
-# plots will have just sig p values, but the new ranking will take into consideration all genes 
-# FINAL.TABLETRANS is same as final table, but -log10 and scaled, to be able to find the BETTER THAN
-
-#CELL 1
-#going to add on the value to final.table (NOT sig table) because want to have all values there
-
-#transform -log10 and scale ALL FPs
-final.tableTRANS <- final.table #putting these somewhere else just to be able to make calculations for Better Than (and the plot using just sig, so that uses a different table)
-final.tableTRANS$Mean.FP.Rate <- -log10(as.numeric(final.tableTRANS[,"Mean.FP.Rate"]))
-final.tableTRANS$Mean.FP.Rate <- final.tableTRANS$Mean.FP.Rate/max(final.tableTRANS$Mean.FP.Rate)
-#transform -log10 and scale ALL P VALUES
-final.tableTRANS$APCpv <- as.numeric(final.tableTRANS[,"APCpv"])
-final.tableTRANS$APCpv[final.tableTRANS[["APCpv"]] == 0] <- 10^(-43) #change zeros - these values were actually found in the next chunk using findingmindegpv
-final.tableTRANS$APCpv <- -log10(final.tableTRANS$APCpv) #-log10
-final.tableTRANS$APCpv <- final.tableTRANS$APCpv/max(final.tableTRANS$APCpv) #scale
-
-#rank
-for(i in 1:length(final.tableTRANS$entrezgene)){
-  final.tableTRANS$BetterThan[[i]] <- length(intersect(final.tableTRANS$entrezgene[final.tableTRANS$Mean.FP.Rate < final.tableTRANS$Mean.FP.Rate[[i]]],
-               final.tableTRANS$entrezgene[final.tableTRANS$APCpv < final.tableTRANS$APCpv[[i]]]))
-}
-  #final.tableTRANS$entrezgene[final.tableTRANS$Mean.FP.Rate < final.tableTRANS$Mean.FP.Rate[[1]]] - all genes that gene i is better than for FP
-  #final.tableTRANS$entrezgene[final.tableTRANS$APCpv < final.tableTRANS$APCpv[[1]]] - all genes that gene i is better than for p value
-  
+```{r BCELL_int_plot}
+IBD_gene_plotr(SIG.final.table = BCELL.SIG.int.final.table, pref = BCELL.int.pref, top10 = BCELL.int.top10, 
+               data.genename.col = "Symbol", pref.genename.col = "Symbol", top10.genename.col = "Symbol", 
+               x.pv.col = "log_p1", y.fpr.col = "log_fp1", title = "BCELL")
+ggsave("BCELL_int.svg", path = figures.dir, height = 10, width = 10, units = "in")
 ```
 
-
-```{r table of -log10 mean FPRs SUPPLEMENTAL}
-###SUP TABLE
-
-#transform -log10 and scale ALL FPs
-final.tableSUP <- final.table 
-final.tableSUP$log10.Mean.FP.Rate <- -log10(as.numeric(final.tableSUP[,"Mean.FP.Rate"]))
-final.tableSUP$Scaled.Mean.FP.Rate <- final.tableSUP$log10.Mean.FP.Rate/max(final.tableSUP$log10.Mean.FP.Rate)
-
-write.csv(final.tableSUP, "INT_allFPRstable.csv")
+```{r CD4_int_plot}
+IBD_gene_plotr(SIG.final.table = CD4.SIG.int.final.table, pref = CD4.int.pref, top10 = CD4.int.top10, 
+               data.genename.col = "Symbol", pref.genename.col = "Symbol", top10.genename.col = "Symbol", 
+               x.pv.col = "log_p1", y.fpr.col = "log_fp1", title = "CD4")
+ggsave("CD4_int.svg", path = figures.dir, height = 10, width = 10, units = "in")
 ```
 
-
-
-
-
-```{r plot}
-#do line by line and do the other chunk part first to find the value
-
-DEGpvSIG <- as.numeric(final.tableSIG[,"APCpv"])
-FindingMinDEGpv <-  DEGpvSIG[DEGpvSIG!=0] #to find min that isn't a zero use min(FindingMinDEGpv)
-DEGpvSIG[DEGpvSIG==0] <- 10^(-43)
-
-DEGpvlog10SIG <- -log10(DEGpvSIG)
-max.DEGpvlog10 <- max(DEGpvlog10SIG)
-DEGpvlog10SIG <- DEGpvlog10SIG/max.DEGpvlog10 #scale
-
-fplog10SIG <- -log10(as.numeric(final.tableSIG[,"Mean.FP.Rate"]))
-max.fplog10 <- max(fplog10SIG)
-fplog10SIG <- fplog10SIG/max.fplog10
-
-#put them all together
-DEGfptable <- data.frame(final.tableSIG[, "Symbol"], DEGpvlog10SIG, fplog10SIG)
-colnames(DEGfptable) <- c("Symbol", "DEGpvlog10", "fplog10")
-
-
-###add rank to table, but have to create a different one because the plot relies on the original, this is to be able to use top 10 and label
-# final.tableTRANS[which.max(final.tableTRANS$Mean.FP.Rate),]le - not using
-DEGfptablewBT <- DEGfptable
-DEGfptablewBT$BetterThan <- final.tableTRANS$BetterThan[match(DEGfptablewBT$Symbol, final.tableTRANS$Symbol)]
-#table1$val2 <- table2$val2[match(table1$pid, table2$pid)] #this was the example to be able to do this
-
-#use this to find top 10 ranked by better than in the list for this cell
-top10_1 <- top_n(DEGfptablewBT, 10, DEGfptablewBT$BetterThan)
-#will need to take out any intersection with pref below
-
-
-# LABELS AND POINTS NEEDED FOR PLOT  
-pref <- psel(DEGfptable, high(DEGpvlog10SIG) * high(fplog10SIG))
-subsetlog <- DEGfptable$Symbol %in% as.character(pref[[1]]) #need this to subset labels on pareto front
-#need to take out any intersection with pref from subset top 10 = top10 names minus pref
-top10naMinuspref <- top10_1[[1]][!(top10_1$Symbol %in% as.character(pref[[1]]))]
-#df1[!(df1$name %in% df2$name),] #use this as the example to take out rows based on intersection with another data frame
-#full logical array taking out labels for the top 10 minus pref - will use this in ggplot for labels
-subsettop10_1 <- DEGfptable$Symbol %in% as.character(top10naMinuspref) #need this to subset labels for top 10 ranked
-
-# PLOT 
-ggplot(DEGfptable, aes(x = DEGpvlog10, y = fplog10, label = Symbol)) + 
-  geom_point(shape = 21, color = "gray20") + #all other gene points
-  geom_step(data = pref, direction = "vh", color = "lightblue", size = 1.5) +  # pareto line
-  geom_point(data = pref, shape = 20, size = 10, color = "orange") + #pareto line points 
-  geom_point(data = top10_1, shape = 20, size = 5.5, color = "tomato3") + #top 10 ranked (better than) points
-  geom_text(aes(x = DEGpvlog10, y = fplog10, label= Symbol), subset(DEGfptable, subset = subsetlog), hjust = -0.2, vjust = -0.5, angle = 15, size = 5) + #pareto labels
-  geom_text(aes(x = DEGpvlog10, y = fplog10, label= Symbol), subset(DEGfptable, subset = subsettop10_1), hjust = -0.2, vjust = -0.5, angle = 15, position = "jitter", size = 5) + #top 10 labels
-  ggtitle("APC") + 
-  labs(y="-log10 SVM FP Rate", x = "-log10 Differential Gene Expression p value") + 
-  coord_equal() +
-  theme(axis.title = element_text(size=30), axis.text = element_text(size = 15)) +
-  xlim(0, 1.05) + 
-  ylim(0, 1.05) #+ geom_line(y = 0.2, colour = "darkgray", linetype = 2)
-
-
-#ggsave("CELL1_APC.svg", height = 10, width = 10, units = "in")
-#ggsave("CELL1_APC.pdf")
-
-
+```{r CD8_int_plot}
+IBD_gene_plotr(SIG.final.table = CD8.SIG.int.final.table, pref = CD8.int.pref, top10 = CD8.int.top10, 
+               data.genename.col = "Symbol", pref.genename.col = "Symbol", top10.genename.col = "Symbol", 
+               x.pv.col = "log_p1", y.fpr.col = "log_fp1", title = "CD8")
+ggsave("CD8_int.svg", path = figures.dir, height = 10, width = 10, units = "in")
 ```
 
-
-
-## CELL 2
-
-instead of having the final ranking be the SVM FP rate PLUS the p-value, we will use the following metric: 
-for every gene in the -log p-value x -log SVM FP rate plot, how many genes are in the area covered by its position. individual genes with more (other) genes in their area box will be ranked higher as they dominate more of the genes contained in the plot
-```{r rank cell 2}
-##CREATE NEW TABLES FIRST - containing -log fp, -log pvalue, symbol, and number dominating
-##this chunk is also overlapping with the V. PLOT chunks ## DO NOT RUN THOSE RIGHT NOW AS THEY ARE 
-
-# note- FINAL.TABLE is all the genes without duplicates from chr 1 and 2, the FINAL.TABLESIG are just the genes FROM THAT CELL TYPE that have significant p values
-# plots will have just sig p values, but the new ranking will take into consideration all genes
-# FINAL.TABLETRANS is same as final table, but -log10 and scaled, to be able to find the BETTER THAN
-
-#CELL 2
-
-#going to add on the value to final.table (NOT sig table) because want to have all values there
-
-#transform -log10 and scale ALL FPs
-final.table2TRANS <- final.table2
-final.table2TRANS$Mean.FP.Rate <- -log10(as.numeric(final.table2TRANS[,"Mean.FP.Rate"]))
-final.table2TRANS$Mean.FP.Rate <- final.table2TRANS$Mean.FP.Rate/max(final.table2TRANS$Mean.FP.Rate)
-#transform -log10 and scale ALL P VALUES
-final.table2TRANS$BCELLpv <- as.numeric(final.table2TRANS[,"BCELLpv"])
-final.table2TRANS$BCELLpv[final.table2TRANS[["BCELLpv"]] == 0] <- 10^(-41) #change zeros
-final.table2TRANS$BCELLpv <- -log10(final.table2TRANS$BCELLpv) #-log10
-final.table2TRANS$BCELLpv <- final.table2TRANS$BCELLpv/max(final.table2TRANS$BCELLpv) #scale
-
-for(i in 1:length(final.table2TRANS$entrezgene)){
-  final.table2TRANS$BetterThan[[i]] <- length(intersect(final.table2TRANS$entrezgene[final.table2TRANS$Mean.FP.Rate < final.table2TRANS$Mean.FP.Rate[[i]]],
-               final.table2TRANS$entrezgene[final.table2TRANS$BCELLpv < final.table2TRANS$BCELLpv[[i]]]))
-}
-  #final.tableTRANS$entrezgene[final.tableTRANS$Mean.FP.Rate < final.tableTRANS$Mean.FP.Rate[[1]]] - all genes that gene i is better than for FP
-  #final.tableTRANS$entrezgene[final.tableTRANS$APCpv < final.tableTRANS$APCpv[[1]]] - all genes that gene i is better than for p value
-  
+```{r TREG_int_plot}
+IBD_gene_plotr(SIG.final.table = TREG.SIG.int.final.table, pref = TREG.int.pref, top10 = TREG.int.top10, 
+               data.genename.col = "Symbol", pref.genename.col = "Symbol", top10.genename.col = "Symbol", 
+               x.pv.col = "log_p1", y.fpr.col = "log_fp1", title = "TREG")
+ggsave("TREG_int.svg", path = figures.dir, height = 10, width = 10, units = "in")
 ```
 
-
-```{r plot cell 2}
-DEGpv2SIG <- as.numeric(final.table2SIG[,"BCELLpv"])
-FindingMinDEGpv <-  DEGpv2SIG[DEGpv2SIG!=0] #to find min that isn't a zero use min(FindingMinDEGpv)
-DEGpv2SIG[DEGpv2SIG==0] <- 10^(-41)
-
-DEGpv2log10SIG <- -log10(DEGpv2SIG)
-max.DEGpv2log10 <- max(DEGpv2log10SIG)
-DEGpv2log10SIG <- DEGpv2log10SIG/max.DEGpv2log10 #scale
-
-fp2log10SIG <- -log10(as.numeric(final.table2SIG[,"Mean.FP.Rate"]))
-max.fp2log10 <- max(fp2log10SIG)
-fp2log10SIG <- fp2log10SIG/max.fp2log10
-
-#put them all together
-DEGfptable2 <- data.frame(final.table2SIG[, "Symbol"], DEGpv2log10SIG, fp2log10SIG)
-colnames(DEGfptable2) <- c("Symbol", "DEGpv2log10", "fp2log10")
-
-###add rank to table, but have to create a different one because the plot relies on the original, this is to be able to use top 10 and label
-# final.tableTRANS[which.max(final.tableTRANS$Mean.FP.Rate),]le
-#final.table$BetterThan <- final.tableTRANS$BetterThan
-DEGfptable2wBT <- DEGfptable2
-DEGfptable2wBT$BetterThan <- final.table2TRANS$BetterThan[match(DEGfptable2wBT$Symbol, final.table2TRANS$Symbol)]
-#table1$val2 <- table2$val2[match(table1$pid, table2$pid)] #this was the example to be able to do this
-
-#use this to find top 10 ranked by better than in the list for the 
-top10_2 <- top_n(DEGfptable2wBT, 10, DEGfptable2wBT$BetterThan)
-#will need to take out any intersection with pref below
-
-
-# LABELS AND POINTS NEEDED FOR PLOT  
-pref2 <- psel(DEGfptable2, high(DEGpv2log10SIG) * high(fp2log10SIG))
-subsetlog2 <- DEGfptable2$Symbol %in% as.character(pref2[[1]]) #need this to subset labels on pareto front
-#need to take out any intersection with pref from subset top 10 = top10 names minus pref
-top10naMinuspref2 <- top10_2[[1]][!(top10_2$Symbol %in% as.character(pref2[[1]]))]
-#df1[!(df1$name %in% df2$name),] #use this as the example to take out rows based on intersection with another data frame
-#full logical array taking out labels for the top 10 minus pref - will use this in ggplot for labels
-subsettop10_2 <- DEGfptable2$Symbol %in% as.character(top10naMinuspref2) #need this to subset labels for top 10 ranked
-
-# PLOT 
-ggplot(DEGfptable2, aes(x = DEGpv2log10, y = fp2log10, label = Symbol)) + 
-  geom_point(shape = 21, color = "gray20") + #all other gene points
-  geom_step(data = pref2, direction = "vh", color = "lightblue", size = 1.5) +  # pareto line
-  geom_point(data = pref2, shape = 20, size = 10, color = "orange") + #pareto line points 
-  geom_point(data = top10_2, shape = 20, size = 5.5, color = "tomato3") + #top 10 ranked (better than) points
-  geom_text(aes(x = DEGpv2log10, y = fp2log10, label= Symbol), subset(DEGfptable2, subset = subsetlog2), hjust = -0.2, vjust = -0.5, angle = 15, size = 5) + #pareto labels
-  geom_text(aes(x = DEGpv2log10, y = fp2log10, label= Symbol), subset(DEGfptable2, subset = subsettop10_2), hjust = -0.2, vjust = -0.5, angle = 15, position = "jitter", size = 5) + #top 10 labels
-  ggtitle("B CELL") + 
-  labs(y="-log10 SVM FP Rate", x = "-log10 Differential Gene Expression p value") + 
-  theme(axis.title = element_text(size=30), axis.text = element_text(size = 15)) +
-  xlim(0, 1.05) + 
-  ylim(0, 1.05) #+ geom_line(y = 0.2, colour = "darkgray", linetype = 2)
-
-
-#ggsave("CELL2_BCELL.svg", height = 10, width = 10, units = "in")
-# ggsave("CELL2_BCELL.pdf")
-
-
+2. Hemolymphoid
+```{r APC_hemo_plot}
+IBD_gene_plotr(SIG.final.table = APC.SIG.hemo.final.table, pref = APC.hemo.pref, top10 = APC.hemo.top10, 
+               data.genename.col = "Symbol", pref.genename.col = "Symbol", top10.genename.col = "Symbol", 
+               x.pv.col = "log_p1", y.fpr.col = "log_fp1", title = "APC")
+ggsave("APC_hemo.svg", path = figures.dir, height = 10, width = 10, units = "in")
 ```
 
-
-
-## CELL 3
-
-instead of having the final ranking be the SVM FP rate PLUS the p-value, we will use the following metric: 
-for every gene in the -log p-value x -log SVM FP rate plot, how many genes are in the area covered by its position. individual genes with more (other) genes in their area box will be ranked higher as they dominate more of the genes contained in the plot
-```{r rank cell 3}
-##CREATE NEW TABLES FIRST - containing -log fp, -log pvalue, symbol, and number dominating
-##this chunk is also overlapping with the V. PLOT chunks ## DO NOT RUN THOSE RIGHT NOW AS THEY ARE 
-
-# note- FINAL.TABLE is all the genes without duplicates from chr 1 and 2, the FINAL.TABLESIG are just the genes FROM THAT CELL TYPE that have significant p values
-# plots will have just sig p values, but the new ranking will take into consideration all genes
-# FINAL.TABLETRANS is same as final table, but -log10 and scaled, to be able to find the BETTER THAN
-
-#CELL 3
-
-#going to add on the value to final.table (NOT sig table) because want to have all values there
-
-#transform -log10 and scale ALL FPs
-final.table3TRANS <- final.table3
-final.table3TRANS$Mean.FP.Rate <- -log10(as.numeric(final.table3TRANS[,"Mean.FP.Rate"]))
-final.table3TRANS$Mean.FP.Rate <- final.table3TRANS$Mean.FP.Rate/max(final.table3TRANS$Mean.FP.Rate)
-#transform -log10 and scale ALL P VALUES
-final.table3TRANS$CD4pv <- as.numeric(final.table3TRANS[,"CD4pv"])
-final.table3TRANS$CD4pv[final.table3TRANS[["CD4pv"]] == 0] <- 10^(-28) #change zeros
-final.table3TRANS$CD4pv <- -log10(final.table3TRANS$CD4pv) #-log10
-final.table3TRANS$CD4pv <- final.table3TRANS$CD4pv/max(final.table3TRANS$CD4pv) #scale
-
-for(i in 1:length(final.table3TRANS$entrezgene)){
-  final.table3TRANS$BetterThan[[i]] <- length(intersect(final.table3TRANS$entrezgene[final.table3TRANS$Mean.FP.Rate < final.table3TRANS$Mean.FP.Rate[[i]]],
-               final.table3TRANS$entrezgene[final.table3TRANS$CD4pv < final.table3TRANS$CD4pv[[i]]]))
-}
-  #final.tableTRANS$entrezgene[final.tableTRANS$Mean.FP.Rate < final.tableTRANS$Mean.FP.Rate[[1]]] - all genes that gene i is better than for FP
-  #final.tableTRANS$entrezgene[final.tableTRANS$APCpv < final.tableTRANS$APCpv[[1]]] - all genes that gene i is better than for p value
-  
+```{r BCELL_hemo_plot}
+IBD_gene_plotr(SIG.final.table = BCELL.SIG.hemo.final.table, pref = BCELL.hemo.pref, top10 = BCELL.hemo.top10, 
+               data.genename.col = "Symbol", pref.genename.col = "Symbol", top10.genename.col = "Symbol", 
+               x.pv.col = "log_p1", y.fpr.col = "log_fp1", title = "BCELL")
+ggsave("BCELL_hemo.svg", path = figures.dir, height = 10, width = 10, units = "in")
 ```
 
-
-```{r plot cell 3}
-DEGpv3SIG <- as.numeric(final.table3SIG[,"CD4pv"])
-FindingMinDEGpv <-  DEGpv3SIG[DEGpv3SIG!=0] #to find min that isn't a zero use min(FindingMinDEGpv)
-DEGpv3SIG[DEGpv3SIG==0] <- 10^(-28)
-
-DEGpv3log10SIG <- -log10(DEGpv3SIG)
-max.DEGpv3log10 <- max(DEGpv3log10SIG)
-DEGpv3log10SIG <- DEGpv3log10SIG/max.DEGpv3log10 #scale
-
-fp3log10SIG <- -log10(as.numeric(final.table3SIG[,"Mean.FP.Rate"]))
-max.fp3log10 <- max(fp3log10SIG)
-fp3log10SIG <- fp3log10SIG/max.fp3log10
-
-#put them all together
-DEGfptable3 <- data.frame(final.table3SIG[, "Symbol"], DEGpv3log10SIG, fp3log10SIG)
-colnames(DEGfptable3) <- c("Symbol", "DEGpv3log10", "fp3log10")
-
-###add rank to table, but have to create a different one because the plot relies on the original, this is to be able to use top 10 and label
-# final.tableTRANS[which.max(final.tableTRANS$Mean.FP.Rate),]le
-#final.table$BetterThan <- final.tableTRANS$BetterThan
-DEGfptable3wBT <- DEGfptable3
-DEGfptable3wBT$BetterThan <- final.table3TRANS$BetterThan[match(DEGfptable3wBT$Symbol, final.table3TRANS$Symbol)]
-#table1$val2 <- table2$val2[match(table1$pid, table2$pid)] #this was the example to be able to do this
-
-#use this to find top 10 ranked by better than in the list for the 
-top10_3 <- top_n(DEGfptable3wBT, 10, DEGfptable3wBT$BetterThan)
-#will need to take out any intersection with pref below
-
-
-# LABELS AND POINTS NEEDED FOR PLOT  
-pref3 <- psel(DEGfptable3, high(DEGpv3log10SIG) * high(fp3log10SIG))
-subsetlog3 <- DEGfptable3$Symbol %in% as.character(pref3[[1]]) #need this to subset labels on pareto front
-#need to take out any intersection with pref from subset top 10 = top10 names minus pref
-top10naMinuspref3 <- top10_3[[1]][!(top10_3$Symbol %in% as.character(pref3[[1]]))]
-#df1[!(df1$name %in% df2$name),] #use this as the example to take out rows based on intersection with another data frame
-#full logical array taking out labels for the top 10 minus pref - will use this in ggplot for labels
-subsettop10_3 <- DEGfptable3$Symbol %in% as.character(top10naMinuspref3) #need this to subset labels for top 10 ranked
-
-# PLOT 
-ggplot(DEGfptable3, aes(x = DEGpv3log10, y = fp3log10, label = Symbol)) + 
-  geom_point(shape = 21, color = "gray20") + #all other gene points
-  geom_step(data = pref3, direction = "vh", color = "lightblue", size = 1.5) +  # pareto line
-  geom_point(data = pref3, shape = 20, size = 10, color = "orange") + #pareto line points 
-  geom_point(data = top10_3, shape = 20, size = 5.5, color = "tomato3") + #top 10 ranked (better than) points
-  geom_text(aes(x = DEGpv3log10, y = fp3log10, label= Symbol), subset(DEGfptable3, subset = subsetlog3), hjust = -0.2, vjust = -0.5, angle = 15, size = 5) + #pareto labels
-  geom_text(aes(x = DEGpv3log10, y = fp3log10, label= Symbol), subset(DEGfptable3, subset = subsettop10_3), hjust = -0.2, vjust = -0.5, angle = 15, position = "jitter", size = 5) + #top 10 labels
-  ggtitle("CD4") + 
-  labs(y="-log10 SVM FP Rate", x = "-log10 Differential Gene Expression p value") + 
-  theme(axis.title = element_text(size=30), axis.text = element_text(size = 15)) +
-  xlim(0, 1.05) + 
-  ylim(0, 1.05) #+ geom_line(y = 0.2, colour = "darkgray", linetype = 2)
-
-
-#ggsave("CELL3_CD4.svg", height = 10, width = 10, units = "in")
-#ggsave("CELL3_CD4.pdf")
-
-
+```{r CD4_hemo_plot}
+IBD_gene_plotr(SIG.final.table = CD4.SIG.hemo.final.table, pref = CD4.hemo.pref, top10 = CD4.hemo.top10, 
+               data.genename.col = "Symbol", pref.genename.col = "Symbol", top10.genename.col = "Symbol", 
+               x.pv.col = "log_p1", y.fpr.col = "log_fp1", title = "CD4")
+ggsave("CD4_hemo.svg", path = figures.dir, height = 10, width = 10, units = "in")
 ```
 
-
-
-## CELL 4
-
-instead of having the final ranking be the SVM FP rate PLUS the p-value, we will use the following metric: 
-for every gene in the -log p-value x -log SVM FP rate plot, how many genes are in the area covered by its position. individual genes with more (other) genes in their area box will be ranked higher as they dominate more of the genes contained in the plot
-```{r rank cell 4}
-##CREATE NEW TABLES FIRST - containing -log fp, -log pvalue, symbol, and number dominating
-##this chunk is also overlapping with the V. PLOT chunks ## DO NOT RUN THOSE RIGHT NOW AS THEY ARE 
-
-# note- FINAL.TABLE is all the genes without duplicates from chr 1 and 2, the FINAL.TABLESIG are just the genes FROM THAT CELL TYPE that have significant p values
-# plots will have just sig p values, but the new ranking will take into consideration all genes
-# FINAL.TABLETRANS is same as final table, but -log10 and scaled, to be able to find the BETTER THAN
-
-#CELL 4
-
-#going to add on the value to final.table (NOT sig table) because want to have all values there
-
-#transform -log10 and scale ALL FPs
-final.table4TRANS <- final.table4
-final.table4TRANS$Mean.FP.Rate <- -log10(as.numeric(final.table4TRANS[,"Mean.FP.Rate"]))
-final.table4TRANS$Mean.FP.Rate <- final.table4TRANS$Mean.FP.Rate/max(final.table4TRANS$Mean.FP.Rate)
-#transform -log10 and scale ALL P VALUES
-final.table4TRANS$CD8pv <- as.numeric(final.table4TRANS[,"CD8pv"])
-final.table4TRANS$CD8pv[final.table4TRANS[["CD8pv"]] == 0] <- 10^(-28) #change zeros
-final.table4TRANS$CD8pv <- -log10(final.table4TRANS$CD8pv) #-log10
-final.table4TRANS$CD8pv <- final.table4TRANS$CD8pv/max(final.table4TRANS$CD8pv) #scale
-
-for(i in 1:length(final.table4TRANS$entrezgene)){
-  final.table4TRANS$BetterThan[[i]] <- length(intersect(final.table4TRANS$entrezgene[final.table4TRANS$Mean.FP.Rate < final.table4TRANS$Mean.FP.Rate[[i]]],
-               final.table4TRANS$entrezgene[final.table4TRANS$CD8pv < final.table4TRANS$CD8pv[[i]]]))
-}
-  #final.tableTRANS$entrezgene[final.tableTRANS$Mean.FP.Rate < final.tableTRANS$Mean.FP.Rate[[1]]] - all genes that gene i is better than for FP
-  #final.tableTRANS$entrezgene[final.tableTRANS$APCpv < final.tableTRANS$APCpv[[1]]] - all genes that gene i is better than for p value
-  
+```{r CD8_hemo_plot}
+IBD_gene_plotr(SIG.final.table = CD8.SIG.hemo.final.table, pref = CD8.hemo.pref, top10 = CD8.hemo.top10, 
+               data.genename.col = "Symbol", pref.genename.col = "Symbol", top10.genename.col = "Symbol", 
+               x.pv.col = "log_p1", y.fpr.col = "log_fp1", title = "CD8")
+ggsave("CD8_hemo.svg", path = figures.dir, height = 10, width = 10, units = "in")
 ```
 
-
-```{r plot cell 4}
-DEGpv4SIG <- as.numeric(final.table4SIG[,"CD8pv"])
-FindingMinDEGpv <-  DEGpv4SIG[DEGpv4SIG!=0] #to find min that isn't a zero use min(FindingMinDEGpv)
-DEGpv4SIG[DEGpv4SIG==0] <- 10^(-28)
-
-DEGpv4log10SIG <- -log10(DEGpv4SIG)
-max.DEGpv4log10 <- max(DEGpv4log10SIG)
-DEGpv4log10SIG <- DEGpv4log10SIG/max.DEGpv4log10 #scale
-
-fp4log10SIG <- -log10(as.numeric(final.table4SIG[,"Mean.FP.Rate"]))
-max.fp4log10 <- max(fp4log10SIG)
-fp4log10SIG <- fp4log10SIG/max.fp4log10
-
-#put them all together
-DEGfptable4 <- data.frame(final.table4SIG[, "Symbol"], DEGpv4log10SIG, fp4log10SIG)
-colnames(DEGfptable4) <- c("Symbol", "DEGpv4log10", "fp4log10")
-
-###add rank to table, but have to create a different one because the plot relies on the original, this is to be able to use top 10 and label
-# final.tableTRANS[which.max(final.tableTRANS$Mean.FP.Rate),]le
-#final.table$BetterThan <- final.tableTRANS$BetterThan
-DEGfptable4wBT <- DEGfptable4
-DEGfptable4wBT$BetterThan <- final.table4TRANS$BetterThan[match(DEGfptable4wBT$Symbol, final.table4TRANS$Symbol)]
-#table1$val2 <- table2$val2[match(table1$pid, table2$pid)] #this was the example to be able to do this
-
-#use this to find top 10 ranked by better than in the list for the 
-top10_4 <- top_n(DEGfptable4wBT, 10, DEGfptable4wBT$BetterThan)
-#will need to take out any intersection with pref below
-
-
-# LABELS AND POINTS NEEDED FOR PLOT  
-pref4 <- psel(DEGfptable4, high(DEGpv4log10SIG) * high(fp4log10SIG))
-subsetlog4 <- DEGfptable4$Symbol %in% as.character(pref4[[1]]) #need this to subset labels on pareto front
-#need to take out any intersection with pref from subset top 10 = top10 names minus pref
-top10naMinuspref4 <- top10_4[[1]][!(top10_4$Symbol %in% as.character(pref4[[1]]))]
-#df1[!(df1$name %in% df2$name),] #use this as the example to take out rows based on intersection with another data frame
-#full logical array taking out labels for the top 10 minus pref - will use this in ggplot for labels
-subsettop10_4 <- DEGfptable4$Symbol %in% as.character(top10naMinuspref4) #need this to subset labels for top 10 ranked
-
-# PLOT 
-ggplot(DEGfptable4, aes(x = DEGpv4log10, y = fp4log10, label = Symbol)) + 
-  geom_point(shape = 21, color = "gray20") + #all other gene points
-  geom_step(data = pref4, direction = "vh", color = "lightblue", size = 1.5) +  # pareto line
-  geom_point(data = pref4, shape = 20, size = 10, color = "orange") + #pareto line points 
-  geom_point(data = top10_4, shape = 20, size = 5.5, color = "tomato3") + #top 10 ranked (better than) points
-  geom_text(aes(x = DEGpv4log10, y = fp4log10, label= Symbol), subset(DEGfptable4, subset = subsetlog4), hjust = -0.2, vjust = -0.5, angle = 15, size = 5) + #pareto labels
-  geom_text(aes(x = DEGpv4log10, y = fp4log10, label= Symbol), subset(DEGfptable4, subset = subsettop10_4), hjust = -0.2, vjust = -0.5, angle = 15, position = "jitter", size = 5) + #top 10 labels
-  ggtitle("CD8") + 
-  labs(y="-log10 SVM FP Rate", x = "-log10 Differential Gene Expression p value") + 
-  theme(axis.title = element_text(size=30), axis.text = element_text(size = 15)) +
-  xlim(0, 1.05) + 
-  ylim(0, 1.05) #+ geom_line(y = 0.2, colour = "darkgray", linetype = 2)
-
-
-#ggsave("CELL4_CD8.svg", height = 10, width = 10, units = "in")
-#ggsave("CELL4_CD8.pdf")
-
-
+```{r TREG_hemo_plot}
+IBD_gene_plotr(SIG.final.table = TREG.SIG.hemo.final.table, pref = TREG.hemo.pref, top10 = TREG.hemo.top10, 
+               data.genename.col = "Symbol", pref.genename.col = "Symbol", top10.genename.col = "Symbol", 
+               x.pv.col = "log_p1", y.fpr.col = "log_fp1", title = "TREG")
+ggsave("TREG_hemo.svg", path = figures.dir, height = 10, width = 10, units = "in")
 ```
 
+## XI. Heatmap tables
+
+We created heatmaps of differential gene expression for chromosome 1 and 2 for each network SVM, as well as the overlap of significant genes and GWAS genes for both chromosomes (1:1).
+A. Create tables with all values for heatmap
+```{r heatmap_tables}
+#1. Intestine
+chr1.int.hm.table <- int.final.table %>% 
+  filter(Chr == 1) %>% 
+  filter(Symbol %in% c(APC.int.pref$Symbol, BCELL.int.pref$Symbol, CD4.int.pref$Symbol, CD8.int.pref$Symbol, TREG.int.pref$Symbol, APC.int.top10$Symbol, BCELL.int.top10$Symbol, CD4.int.top10$Symbol, CD8.int.top10$Symbol, TREG.int.top10$Symbol)) 
 
 
-## CELL 5
+chr2.int.hm.table <- int.final.table %>% 
+  filter(Chr == 2) %>% 
+  filter(Symbol %in% c(APC.int.pref$Symbol, BCELL.int.pref$Symbol, CD4.int.pref$Symbol, CD8.int.pref$Symbol, TREG.int.pref$Symbol, APC.int.top10$Symbol, BCELL.int.top10$Symbol, CD4.int.top10$Symbol, CD8.int.top10$Symbol, TREG.int.top10$Symbol))
 
-instead of having the final ranking be the SVM FP rate PLUS the p-value, we will use the following metric: 
-for every gene in the -log p-value x -log SVM FP rate plot, how many genes are in the area covered by its position. individual genes with more (other) genes in their area box will be ranked higher as they dominate more of the genes contained in the plot
-```{r rank cell 5}
-##CREATE NEW TABLES FIRST - containing -log fp, -log pvalue, symbol, and number dominating
-##this chunk is also overlapping with the V. PLOT chunks ## DO NOT RUN THOSE RIGHT NOW AS THEY ARE 
+#2. Hemolymphoid
+chr1.hemo.hm.table <- hemo.final.table %>% 
+  filter(Chr == 1) %>% 
+  filter(Symbol %in% c(APC.hemo.pref$Symbol, BCELL.hemo.pref$Symbol, CD4.hemo.pref$Symbol, CD8.hemo.pref$Symbol, TREG.hemo.pref$Symbol, APC.hemo.top10$Symbol, BCELL.hemo.top10$Symbol, CD4.hemo.top10$Symbol, CD8.hemo.top10$Symbol, TREG.hemo.top10$Symbol)) 
 
-# note- FINAL.TABLE is all the genes without duplicates from chr 1 and 2, the FINAL.TABLESIG are just the genes FROM THAT CELL TYPE that have significant p values
-# plots will have just sig p values, but the new ranking will take into consideration all genes
-# FINAL.TABLETRANS is same as final table, but -log10 and scaled, to be able to find the BETTER THAN
 
-#CELL 5
-
-#going to add on the value to final.table (NOT sig table) because want to have all values there
-
-#transform -log10 and scale ALL FPs
-final.table5TRANS <- final.table5
-final.table5TRANS$Mean.FP.Rate <- -log10(as.numeric(final.table5TRANS[,"Mean.FP.Rate"]))
-final.table5TRANS$Mean.FP.Rate <- final.table5TRANS$Mean.FP.Rate/max(final.table5TRANS$Mean.FP.Rate)
-#transform -log10 and scale ALL P VALUES
-final.table5TRANS$TREGpv <- as.numeric(final.table5TRANS[,"TREGpv"])
-final.table5TRANS$TREGpv[final.table5TRANS[["TREGpv"]] == 0] <- 10^(-35) #change zeros
-final.table5TRANS$TREGpv <- -log10(final.table5TRANS$TREGpv) #-log10
-final.table5TRANS$TREGpv <- final.table5TRANS$TREGpv/max(final.table5TRANS$TREGpv) #scale
-
-for(i in 1:length(final.table5TRANS$entrezgene)){
-  final.table5TRANS$BetterThan[[i]] <- length(intersect(final.table5TRANS$entrezgene[final.table5TRANS$Mean.FP.Rate < final.table5TRANS$Mean.FP.Rate[[i]]],
-               final.table5TRANS$entrezgene[final.table5TRANS$TREGpv < final.table5TRANS$TREGpv[[i]]]))
-}
-  #final.tableTRANS$entrezgene[final.tableTRANS$Mean.FP.Rate < final.tableTRANS$Mean.FP.Rate[[1]]] - all genes that gene i is better than for FP
-  #final.tableTRANS$entrezgene[final.tableTRANS$APCpv < final.tableTRANS$APCpv[[1]]] - all genes that gene i is better than for p value
-  
+chr2.hemo.hm.table <- hemo.final.table %>% 
+  filter(Chr == 2) %>% 
+  filter(Symbol %in% c(APC.hemo.pref$Symbol, BCELL.hemo.pref$Symbol, CD4.hemo.pref$Symbol, CD8.hemo.pref$Symbol, TREG.hemo.pref$Symbol, APC.hemo.top10$Symbol, BCELL.hemo.top10$Symbol, CD4.hemo.top10$Symbol, CD8.hemo.top10$Symbol, TREG.hemo.top10$Symbol))
 ```
 
-
-```{r plot cell 5}
-DEGpv5SIG <- as.numeric(final.table5SIG[,"TREGpv"])
-FindingMinDEGpv <-  DEGpv5SIG[DEGpv5SIG!=0] #to find min that isn't a zero use min(FindingMinDEGpv)
-DEGpv5SIG[DEGpv5SIG==0] <- 10^(-35)
-
-DEGpv5log10SIG <- -log10(DEGpv5SIG)
-max.DEGpv5log10 <- max(DEGpv5log10SIG)
-DEGpv5log10SIG <- DEGpv5log10SIG/max.DEGpv5log10 #scale
-
-fp5log10SIG <- -log10(as.numeric(final.table5SIG[,"Mean.FP.Rate"]))
-max.fp5log10 <- max(fp5log10SIG)
-fp5log10SIG <- fp5log10SIG/max.fp5log10
-
-#put them all together
-DEGfptable5 <- data.frame(final.table5SIG[, "Symbol"], DEGpv5log10SIG, fp5log10SIG)
-colnames(DEGfptable5) <- c("Symbol", "DEGpv5log10", "fp5log10")
-
-###add rank to table, but have to create a different one because the plot relies on the original, this is to be able to use top 10 and label
-# final.tableTRANS[which.max(final.tableTRANS$Mean.FP.Rate),]le
-#final.table$BetterThan <- final.tableTRANS$BetterThan
-DEGfptable5wBT <- DEGfptable5
-DEGfptable5wBT$BetterThan <- final.table5TRANS$BetterThan[match(DEGfptable5wBT$Symbol, final.table5TRANS$Symbol)]
-#table1$val2 <- table2$val2[match(table1$pid, table2$pid)] #this was the example to be able to do this
-
-#use this to find top 10 ranked by better than in the list for the 
-top10_5 <- top_n(DEGfptable5wBT, 10, DEGfptable5wBT$BetterThan)
-#will need to take out any intersection with pref below
-
-
-# LABELS AND POINTS NEEDED FOR PLOT  
-pref5 <- psel(DEGfptable5, high(DEGpv5log10SIG) * high(fp5log10SIG))
-subsetlog5 <- DEGfptable5$Symbol %in% as.character(pref5[[1]]) #need this to subset labels on pareto front
-#need to take out any intersection with pref from subset top 10 = top10 names minus pref
-top10naMinuspref5 <- top10_5[[1]][!(top10_5$Symbol %in% as.character(pref5[[1]]))]
-#df1[!(df1$name %in% df2$name),] #use this as the example to take out rows based on intersection with another data frame
-#full logical array taking out labels for the top 10 minus pref - will use this in ggplot for labels
-subsettop10_5 <- DEGfptable5$Symbol %in% as.character(top10naMinuspref5) #need this to subset labels for top 10 ranked
-
-# PLOT 
-ggplot(DEGfptable5, aes(x = DEGpv5log10, y = fp5log10, label = Symbol)) + 
-  geom_point(shape = 21, color = "gray20") + #all other gene points
-  geom_step(data = pref5, direction = "vh", color = "lightblue", size = 1.5) +  # pareto line
-  geom_point(data = pref5, shape = 20, size = 10, color = "orange") + #pareto line points 
-  geom_point(data = top10_5, shape = 20, size = 5.5, color = "tomato3") + #top 10 ranked (better than) points
-  geom_text(aes(x = DEGpv5log10, y = fp5log10, label= Symbol), subset(DEGfptable5, subset = subsetlog5), hjust = -0.2, vjust = -0.5, angle = 15, size = 4) + #pareto labels
-  geom_text(aes(x = DEGpv5log10, y = fp5log10, label= Symbol), subset(DEGfptable5, subset = subsettop10_5), hjust = -0.2, vjust = -0.5, angle = 15, position = "jitter", size = 5) + #top 10 labels
-  ggtitle("T REG") + 
-  labs(y="-log10 SVM FP Rate", x = "-log10 Differential Gene Expression p value") + 
-  theme(axis.title = element_text(size=30), axis.text = element_text(size = 15)) +
-  xlim(0, 1.05) + 
-  ylim(0, 1.05) #+ geom_line(y = 0.2, colour = "darkgray", linetype = 2)
-
-
-#ggsave("CELL5_TREG.svg", height = 10, width = 10, units = "in")
-#ggsave("CELL5_TREG.pdf")
-
-
+B. Order by highest total.score and table melt
+```{r order_and_melt}
+chr1.int.melt <- IBD_order_melt(chr1.int.hm.table)
+chr2.int.melt <- IBD_order_melt(chr2.int.hm.table)
+chr1.hemo.melt <- IBD_order_melt(chr1.hemo.hm.table)
+chr2.hemo.melt <- IBD_order_melt(chr2.hemo.hm.table)
 ```
 
-
-
-## All Pref and top 10
-this is just for my personal visualization 
-
-```{r allPref and allTop10 tables}
-#all genes on pareto fronts from all five cell types
-allPref <- bind_rows(pref, pref2, pref3, pref4, pref5)
-allPrefnames <- c(as.character(pref[[1]]), as.character(pref2[[1]]), as.character(pref3[[1]]), as.character(pref4[[1]]), as.character(pref5[[1]]))
-
-#were these in the original SVM training?
-inTraining <- toupper(allPref[[1]]) %in% as.character(IBDGWASmouseEntrez[["name"]])
-#use allPref[[1]][inTraining] to see which were used in training (toupper is for case sensitivity)
-
-
-## Add BETTER THAN scores to all Pref (just to see)
-allPref$Betterthan1 <- final.tableTRANS$BetterThan[match(allPref$Symbol, final.tableTRANS$Symbol)]
-allPref$Betterthan2 <- final.table2TRANS$BetterThan[match(allPref$Symbol, final.table2TRANS$Symbol)]
-allPref$Betterthan3 <- final.table3TRANS$BetterThan[match(allPref$Symbol, final.table3TRANS$Symbol)]
-allPref$Betterthan4 <- final.table4TRANS$BetterThan[match(allPref$Symbol, final.table4TRANS$Symbol)]
-allPref$Betterthan5 <- final.table5TRANS$BetterThan[match(allPref$Symbol, final.table5TRANS$Symbol)]
-
-#all top together
-allTop10 <- bind_rows(top10_1, top10_2, top10_3, top10_4, top10_5)
-allTop10$BetterThan <- NULL #takes out the better than from the original top10s that overlap 
-#add better than
-allTop10$Betterthan1 <- final.tableTRANS$BetterThan[match(allTop10$Symbol, final.tableTRANS$Symbol)]
-allTop10$Betterthan2 <- final.table2TRANS$BetterThan[match(allTop10$Symbol, final.table2TRANS$Symbol)]
-allTop10$Betterthan3 <- final.table3TRANS$BetterThan[match(allTop10$Symbol, final.table3TRANS$Symbol)]
-allTop10$Betterthan4 <- final.table4TRANS$BetterThan[match(allTop10$Symbol, final.table4TRANS$Symbol)]
-allTop10$Betterthan5 <- final.table5TRANS$BetterThan[match(allTop10$Symbol, final.table5TRANS$Symbol)]
-#these are inclusive of pareto front genes
-
-#allpref + alltop
-ALLprefALLtop <- rbind(allPref, allTop10)
-
+C. 1:1 heatmap tables
+```{r one_to_one_table}
+#IBDGWAS 1:1 genes (from DK)
+chr.1to1 <- tibble(Symbol = c("Atp1b1", "Cacna1s", "Cd28", "F5", "Gpr35", "Nme7", "Ptprc", "Slamf8", "Ada", "Asxl1", "Cd40", "Il2ra", "Itga4", "Kif3b", "Pkig", "Serinc3", "Tm9sf4", "Ttpal"),
+                   chr = c(1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2))
+chr.1to1 <- right_join(int.final.table, chr.1to1, by = "Symbol")
+#restructure and melt
+chr1.1to1 <- chr.1to1 %>% filter(chr == 1)
+chr2.1to1 <- chr.1to1 %>% filter(chr == 2)
+chr1.1to1.melt <- IBD_order_melt(chr1.1to1)
+chr2.1to1.melt <- IBD_1to1_melt(chr2.1to1)
 ```
 
-``` {r SUPPLEMENTAL}
+## XII. Heatmaps
 
-#for just supplemental
-ALLprefALLtopSUP <- ALLprefALLtop
-
-
-  #### EXPORT FOR SUPPLEMENTAL
-for (i in 1:nrow(ALLprefALLtopSUP)) {
-  #if there is a number and not an NA in the first column row i
-  if (!is.na(ALLprefALLtopSUP$DEGpvlog10[i]))   {
-    #then put the number from better than into the new bt1 column
-    ALLprefALLtopSUP$BT1[i] <- ALLprefALLtopSUP$Betterthan1[i]
-  } else {
-    ALLprefALLtopSUP$BT1[i] <- NA
-  }
-}
-for (i in 1:nrow(ALLprefALLtopSUP)) {
-  #if there is a number and not an NA in the first column row i
-  if (!is.na(ALLprefALLtopSUP$DEGpv2log10[i]))   {
-    #then put the number from better than into the new bt1 column
-    ALLprefALLtopSUP$BT2[i] <- ALLprefALLtopSUP$Betterthan2[i]
-  } else {
-    ALLprefALLtopSUP$BT2[i] <- NA
-  }
-}
-for (i in 1:nrow(ALLprefALLtopSUP)) {
-  #if there is a number and not an NA in the first column row i
-  if (!is.na(ALLprefALLtopSUP$DEGpv3log10[i]))   {
-    #then put the number from better than into the new bt1 column
-    ALLprefALLtopSUP$BT3[i] <- ALLprefALLtopSUP$Betterthan3[i]
-  } else {
-    ALLprefALLtopSUP$BT3[i] <- NA
-  }
-}
-for (i in 1:nrow(ALLprefALLtopSUP)) {
-  #if there is a number and not an NA in the first column row i
-  if (!is.na(ALLprefALLtopSUP$DEGpv4log10[i]))   {
-    #then put the number from better than into the new bt1 column
-    ALLprefALLtopSUP$BT4[i] <- ALLprefALLtopSUP$Betterthan4[i]
-  } else {
-    ALLprefALLtopSUP$BT4[i] <- NA
-  }
-}
-for (i in 1:nrow(ALLprefALLtopSUP)) {
-  #if there is a number and not an NA in the first column row i
-  if (!is.na(ALLprefALLtopSUP$DEGpv5log10[i]))   {
-    #then put the number from better than into the new bt1 column
-    ALLprefALLtopSUP$BT5[i] <- ALLprefALLtopSUP$Betterthan5[i]
-  } else {
-    ALLprefALLtopSUP$BT5[i] <- NA
-  }
-}
-  
-#take out unecessary columns 
-ALLprefALLtopSUP <- ALLprefALLtopSUP[ , c(1, 17:21)]
-
-ALLprefALLtopSUP %<>%
-  group_by(Symbol) %>%
-  summarise_all(mean, na.rm = TRUE)
-
-write.csv(ALLprefALLtopSUP, "IntALLprefALLtop.csv")
-#see below for the same table though
-
-####
-#making allPref that has no duplicates 
-##not done yet
-# LABELS AND POINTS NEEDED FOR PLOT  
-# pref5 <- psel(DEGfptable5, high(DEGpv5log10SIG) * high(fp5log10SIG))
-# subsetlog5 <- DEGfptable5$Symbol %in% as.character(pref5[[1]]) #need this to subset labels on pareto front
-# #need to take out any intersection with pref from subset top 10 = top10 names minus pref
-# top10naMinuspref5 <- top10_5[[1]][!(top10_5$Symbol %in% as.character(pref5[[1]]))]
-# #df1[!(df1$name %in% df2$name),] #use this as the example to take out rows based on intersection with another data frame
-# #full logical array taking out labels for the top 10 minus pref - will use this in ggplot for labels
-# subsettop10_5 <- DEGfptable5$Symbol %in% as.character(top10naMinuspref5) #need this to subset labels for top 10 ranked
-
+A. SVM heatmaps
+```{r SVM_heatmap}
+int_chr1_HM <- INT.chr1.heatmap(chr1.int.melt)
+int_chr2_HM <- INT.chr2.heatmap(chr2.int.melt)
+hemo_chr1_HM <- HEMO.chr1.heatmap(chr1.hemo.melt)
+hemo_chr2_HM <- HEMO.chr2.heatmap(chr2.hemo.melt)
 ```
 
-
-
-##VII. heatmap tables to use for fold change heatmap with final.score for allpref
-
-
-```{r ggplot for heatmap chr1 }
-#redo the heatmaptables first using pareto AND top genes
-#chr. 1
-
-
-heatmaptableAPC <- 
-  final.tableTRANS %>%
-  filter(Chr ==1) %>%
-  filter(Symbol %in% c(as.character(pref[[1]]), as.character(top10_1[[1]])))
-  
-
-heatmaptableBCELL <- 
-  final.table2TRANS %>%
-  filter(Chr ==1) %>%
-  filter(Symbol %in% c(as.character(pref2[[1]]), as.character(top10_2[[1]])))
-
-heatmaptableCD4 <-
-  final.table3TRANS %>%
-  filter(Chr ==1) %>%
-  filter(Symbol %in% c(as.character(pref3[[1]]), as.character(top10_3[[1]])))
-
-heatmaptableCD8 <- 
-  final.table4TRANS %>%
-  filter(Chr ==1) %>%
-  filter(Symbol %in% c(as.character(pref4[[1]]), as.character(top10_4[[1]])))
-
-heatmaptableTREG <- 
-  final.table5TRANS %>%
-  filter(Chr ==1) %>%
-  filter(Symbol %in% c(as.character(pref5[[1]]), as.character(top10_5[[1]])))
-
-#get FC for each cell type from all the tables
-heatmaptable <- 
-  rbind((cbind(heatmaptableAPC$Symbol,heatmaptableAPC$Fold.Change.PWD...APCs.vs..B6...APCs., heatmaptableAPC$Fold.Change.PWD...Bcells.vs..B6...Bcells., heatmaptableAPC$Fold.Change.PWD...CD4.vs..B6...CD4., heatmaptableAPC$Fold.Change.PWD...CD8.vs..B6...CD8., heatmaptableAPC$Fold.Change.PWD...Tregs.vs..B6...Tregs., heatmaptableAPC$BetterThan)), 
-        (cbind(heatmaptableBCELL$Symbol, heatmaptableBCELL$Fold.Change.PWD...APCs.vs..B6...APCs., heatmaptableBCELL$Fold.Change.PWD...Bcells.vs..B6...Bcells., heatmaptableBCELL$Fold.Change.PWD...CD4.vs..B6...CD4., heatmaptableBCELL$Fold.Change.PWD...CD8.vs..B6...CD8., heatmaptableBCELL$Fold.Change.PWD...Tregs.vs..B6...Tregs., heatmaptableBCELL$BetterThan)), 
-        (cbind(heatmaptableCD4$Symbol, heatmaptableCD4$Fold.Change.PWD...APCs.vs..B6...APCs., heatmaptableCD4$Fold.Change.PWD...Bcells.vs..B6...Bcells., heatmaptableCD4$Fold.Change.PWD...CD4.vs..B6...CD4., heatmaptableCD4$Fold.Change.PWD...CD8.vs..B6...CD8., heatmaptableCD4$Fold.Change.PWD...Tregs.vs..B6...Tregs., heatmaptableCD4$BetterThan)), 
-        (cbind(heatmaptableCD8$Symbol, heatmaptableCD8$Fold.Change.PWD...APCs.vs..B6...APCs., heatmaptableCD8$Fold.Change.PWD...Bcells.vs..B6...Bcells., heatmaptableCD8$Fold.Change.PWD...CD4.vs..B6...CD4., heatmaptableCD8$Fold.Change.PWD...CD8.vs..B6...CD8., heatmaptableCD8$Fold.Change.PWD...Tregs.vs..B6...Tregs., heatmaptableCD8$BetterThan)), 
-        (cbind(heatmaptableTREG$Symbol, heatmaptableTREG$Fold.Change.PWD...APCs.vs..B6...APCs., heatmaptableTREG$Fold.Change.PWD...Bcells.vs..B6...Bcells., heatmaptableTREG$Fold.Change.PWD...CD4.vs..B6...CD4., heatmaptableTREG$Fold.Change.PWD...CD8.vs..B6...CD8., heatmaptableTREG$Fold.Change.PWD...Tregs.vs..B6...Tregs., heatmaptableTREG$BetterThan)))
-
-
-
-#change column names to be able to work with
-heatmaptable <- data.frame(heatmaptable, stringsAsFactors = FALSE) #have to do this so the levels don't cary over
-colnames(heatmaptable) <- c("Symbol", "FCapc", "FCbcell", "FCcd4", "FCcd8", "FCtreg", "BetterThan")
-
-#take out duplicates and just use top ranked line
-heatmaptable <- 
-  heatmaptable %>%
-  group_by(Symbol) %>%
-  top_n(1, BetterThan) %>%
-  distinct(Symbol, .keep_all= TRUE) %>%
-  ungroup()
-#have to turn this into numeric first to be able to order it
-heatmaptable$BetterThan <- as.numeric(heatmaptable$BetterThan)
-#order by better than
-heatmaptableordered <- as.data.frame(heatmaptable[order(as.numeric(as.character(heatmaptable$BetterThan)), decreasing = FALSE),][ , 1:6])
-
-#have to reshape table
-heatmaptableordered$FCapc <- as.numeric(as.character((heatmaptableordered$FCapc)))
-heatmaptableordered$FCbcell <- as.numeric(as.character((heatmaptableordered$FCbcell)))
-heatmaptableordered$FCcd4 <- as.numeric(as.character((heatmaptableordered$FCcd4)))
-heatmaptableordered$FCcd8 <- as.numeric(as.character((heatmaptableordered$FCcd8)))
-heatmaptableordered$FCtreg <- as.numeric(as.character((heatmaptableordered$FCtreg)))
-
-#heatmap
-
-#get range to be able to find the limits for ggplot (then can use this to do breaks)
-allFCch1 <- c(heatmaptableordered$FCapc, heatmaptableordered$FCbcell, heatmaptableordered$FCcd4, heatmaptableordered$FCcd8, heatmaptableordered$FCtreg)
-RANGEallFCch1 <- range(allFCch1) #to find RANGE
-#range = -267, 4
-#SECONDminallFCch1 <- min(allFCch1[allFCch1!=min(range(allFCch1))])
-#here it is
-
-#find where to put the breaks - this is just to visualize and map what number to put for which break value
-BreaksChr1Numbers <- as.data.frame(seq(4, -10)) # INSTEAD USE QUANT below - and use the range for the min, and the quant for the max below the extreme values
-BreaksChr1Numbers$values <- seq(-100, 0, length.out = 15)
-
-# NEW IDEA - use 95% and 5%
-QUANTallFCch1 <- quantile(allFCch1, c(.05, .95))
-# 5% -9.354619 and 95% 2.311628 
-
-
-
-#pick out the gene/cell combo that have sig p values 
-heatmaptableWpv <- heatmaptableordered
-heatmaptableWpv$APCpv <- final.table$APCpv[match(heatmaptableWpv$Symbol, final.table$Symbol)]
-heatmaptableWpv$BCELLpv <- final.table$BCELLpv[match(heatmaptableWpv$Symbol, final.table$Symbol)]
-heatmaptableWpv$CD4pv <- final.table$CD4pv[match(heatmaptableWpv$Symbol, final.table$Symbol)]
-heatmaptableWpv$CD8pv <- final.table$CD8pv[match(heatmaptableWpv$Symbol, final.table$Symbol)]
-heatmaptableWpv$TREGpv <- final.table$TREGpv[match(heatmaptableWpv$Symbol, final.table$Symbol)]
-
-#turn insignificant p values to zero in the fold change
-heatmaptableWpv$FCapc[heatmaptableWpv$APCpv > 0.05] <- 0
-heatmaptableWpv$FCbcell[heatmaptableWpv$BCELLpv > 0.05] <- 0
-heatmaptableWpv$FCcd4[heatmaptableWpv$CD4pv > 0.05] <- 0
-heatmaptableWpv$FCcd8[heatmaptableWpv$CD8pv > 0.05] <- 0
-heatmaptableWpv$FCtreg[heatmaptableWpv$TREGpv > 0.05] <- 0
-
-# #dataframe with just fc values filtered by if the p value was significant
-# heatmaptableWpv[,2:6] %>% filter(heatmaptableWpv$APCpv < 0.05)
-# range(mutate_all(heatmaptable[,2:6], function(x) as.numeric(as.character(x))))
-
-#melt new heatmaptable with NAs
-heatmaptableWOpv <- as.data.frame(heatmaptableWpv[, 1:6])
-colnames(heatmaptableWOpv) <- c("Symbol", "APC", "BCell", "CD4", "CD8", "TReg")
-heatmaptableWOpv.m <- melt(heatmaptableWOpv, id.vars = "Symbol", measure.vars = c("APC", "BCell", "CD4", "CD8", "TReg"))
-#change level order to stay in ordered way by better than
-heatmaptableWOpv.m$Symbol <- factor(heatmaptableWOpv.m$Symbol, levels = heatmaptableordered$Symbol)
-
-
-##gradientn
-#in between gray is zero, whites and grays have to be extremely close, in between white and blue is bottom value before purple (use the quantile)
-pals <- c("tomato2", "white", "white", "gray90", "gray90", "white", "white", "deepskyblue2", "deepskyblue2", "purple", "purple")
-vals <- c(1, 0.717, 0.716, 0.715, 0.71428571, 0.713, 0.712, 0.05, 0.0499, 0.0498, 0) # zero at -71.428571
-brks <- c(4, 0, -9)
-#labels <- c(3, 0, -13, -267)
-
-
-chr1HMint <- 
-ggplot(heatmaptableWOpv.m, aes(variable, Symbol, fill = value)) +
-  geom_tile(color = "white") +
-  #theme_bw() +
-  scale_fill_gradientn(name = "fold \nchange", 
-                       colours = pals,
-                       values = vals, 
-                       limits = c(-10, 4), 
-                       na.value = "purple", 
-                       #limits = c(floor(range[1]), ceiling(range[2])),
-                       breaks = brks) +
-                       #labels = labels) +
-  ggtitle(label = "Chr 1") + 
-  xlab("Cell Type") +
-  ylab("Chr 1 Genes") +
-  theme(axis.text = element_text(size=30), title = element_text(size = 30),
-        axis.title= element_text(size=30), 
-        legend.text = element_text(size=30),
-        legend.title = element_text(size = 30),
-        panel.background = element_rect(fill = "white"), 
-        axis.ticks.y = element_blank()) +
-  coord_fixed(ratio = 1/3)
-#ggsave("Chr1_heatmap.svg", height = 10, width = 10, units = "in")
-#ggsave("Chr1_heatmap.pdf")
+B. 1:1 heatmaps
+```{r one_to_one_heatmap}
+chr1_1to1_HM <- chr1.1to1.heatmap(chr1.1to1.melt)
+chr2_1to1_HM <- chr2.1to1.heatmap(chr2.1to1.melt)
 ```
 
-
-
-```{r ggplot for heatmap chr2 }
-#redo the heatmaptables first using pareto AND top genes
-#chr. 2
-
-
-heatmaptable2APC <- 
-  final.tableTRANS %>%
-  filter(Chr ==2) %>%
-  filter(Symbol %in% c(as.character(pref[[1]]), as.character(top10_1[[1]])))
-  
-heatmaptable2BCELL <- 
-  final.table2TRANS %>%
-  filter(Chr ==2) %>%
-  filter(Symbol %in% c(as.character(pref2[[1]]), as.character(top10_2[[1]])))
-
-heatmaptable2CD4 <-
-  final.table3TRANS %>%
-  filter(Chr ==2) %>%
-  filter(Symbol %in% c(as.character(pref3[[1]]), as.character(top10_3[[1]])))
-
-heatmaptable2CD8 <- 
-  final.table4TRANS %>%
-  filter(Chr ==2) %>%
-  filter(Symbol %in% c(as.character(pref4[[1]]), as.character(top10_4[[1]])))
-
-heatmaptable2TREG <- 
-  final.table5TRANS %>%
-  filter(Chr ==2) %>%
-  filter(Symbol %in% c(as.character(pref5[[1]]), as.character(top10_5[[1]])))
-
-#get FC for each cell type from all the tables
-heatmaptable2 <- 
-  rbind((cbind(heatmaptable2APC$Symbol,heatmaptable2APC$Fold.Change.PWD...APCs.vs..B6...APCs., heatmaptable2APC$Fold.Change.PWD...Bcells.vs..B6...Bcells., heatmaptable2APC$Fold.Change.PWD...CD4.vs..B6...CD4., heatmaptable2APC$Fold.Change.PWD...CD8.vs..B6...CD8., heatmaptable2APC$Fold.Change.PWD...Tregs.vs..B6...Tregs., heatmaptable2APC$BetterThan)), 
-        (cbind(heatmaptable2BCELL$Symbol, heatmaptable2BCELL$Fold.Change.PWD...APCs.vs..B6...APCs., heatmaptable2BCELL$Fold.Change.PWD...Bcells.vs..B6...Bcells., heatmaptable2BCELL$Fold.Change.PWD...CD4.vs..B6...CD4., heatmaptable2BCELL$Fold.Change.PWD...CD8.vs..B6...CD8., heatmaptable2BCELL$Fold.Change.PWD...Tregs.vs..B6...Tregs., heatmaptable2BCELL$BetterThan)), 
-        (cbind(heatmaptable2CD4$Symbol, heatmaptable2CD4$Fold.Change.PWD...APCs.vs..B6...APCs., heatmaptable2CD4$Fold.Change.PWD...Bcells.vs..B6...Bcells., heatmaptable2CD4$Fold.Change.PWD...CD4.vs..B6...CD4., heatmaptable2CD4$Fold.Change.PWD...CD8.vs..B6...CD8., heatmaptable2CD4$Fold.Change.PWD...Tregs.vs..B6...Tregs., heatmaptable2CD4$BetterThan)), 
-        (cbind(heatmaptable2CD8$Symbol, heatmaptable2CD8$Fold.Change.PWD...APCs.vs..B6...APCs., heatmaptable2CD8$Fold.Change.PWD...Bcells.vs..B6...Bcells., heatmaptable2CD8$Fold.Change.PWD...CD4.vs..B6...CD4., heatmaptable2CD8$Fold.Change.PWD...CD8.vs..B6...CD8., heatmaptable2CD8$Fold.Change.PWD...Tregs.vs..B6...Tregs., heatmaptable2CD8$BetterThan)), 
-        (cbind(heatmaptable2TREG$Symbol, heatmaptable2TREG$Fold.Change.PWD...APCs.vs..B6...APCs., heatmaptable2TREG$Fold.Change.PWD...Bcells.vs..B6...Bcells., heatmaptable2TREG$Fold.Change.PWD...CD4.vs..B6...CD4., heatmaptable2TREG$Fold.Change.PWD...CD8.vs..B6...CD8., heatmaptable2TREG$Fold.Change.PWD...Tregs.vs..B6...Tregs., heatmaptable2TREG$BetterThan)))
-
-#change column names to be able to work with
-heatmaptable2 <- data.frame(heatmaptable2, stringsAsFactors = FALSE) #have to do this so the levels don't cary over
-colnames(heatmaptable2) <- c("Symbol", "FCapc", "FCbcell", "FCcd4", "FCcd8", "FCtreg", "BetterThan")
-
-#take out duplicates and just use top ranked line
-heatmaptable2 <- 
-  heatmaptable2 %>%
-  group_by(Symbol) %>%
-  top_n(1, BetterThan) %>%
-  distinct(Symbol, .keep_all= TRUE) %>%
-  ungroup()
-
-# have to turn better than into numeric first to be able to order
-heatmaptable2$BetterThan <- as.numeric(heatmaptable2$BetterThan)
-#order by better than
-heatmaptable2ordered <- as.data.frame(heatmaptable2[order(as.numeric(as.character(heatmaptable2$BetterThan)), decreasing = FALSE),][ , 1:6])
-
-#have to reshape table
-heatmaptable2ordered$FCapc <- as.numeric(as.character((heatmaptable2ordered$FCapc)))
-heatmaptable2ordered$FCbcell <- as.numeric(as.character((heatmaptable2ordered$FCbcell)))
-heatmaptable2ordered$FCcd4 <- as.numeric(as.character((heatmaptable2ordered$FCcd4)))
-heatmaptable2ordered$FCcd8 <- as.numeric(as.character((heatmaptable2ordered$FCcd8)))
-heatmaptable2ordered$FCtreg <- as.numeric(as.character((heatmaptable2ordered$FCtreg)))
-
-
-#heatmap
-
-#get range to be able to find the limits for ggplot (then can use this to do breaks)
-allFCch2 <- c(heatmaptable2ordered$FCapc, heatmaptable2ordered$FCbcell, heatmaptable2ordered$FCcd4, heatmaptable2ordered$FCcd8, heatmaptable2ordered$FCtreg)
-RANGEallFCch2 <- range(allFCch2) # -5.9713 52.2411 (-6, 53)
-
-
-#find where to put the breaks - this is just to visualize and map what number to put for which break value
-BreaksChr2Numbers <- as.data.frame(seq(7, -6)) # INSTEAD USE QUANT below for extreme values and min range for the other end
-BreaksChr2Numbers$values <- seq(-100, 0, length.out = 14)
-
-# NEW IDEA - use 95% and 5%
-QUANTallFCch2 <- quantile(allFCch2, c(.05, .95))
-# 5% -4.487582  and 95% is 6.801857 
-
-
-#pick out the gene/cell combo that have sig p values 
-heatmaptable2Wpv <- heatmaptable2ordered
-heatmaptable2Wpv$APCpv <- final.table$APCpv[match(heatmaptable2Wpv$Symbol, final.table$Symbol)]
-heatmaptable2Wpv$BCELLpv <- final.table$BCELLpv[match(heatmaptable2Wpv$Symbol, final.table$Symbol)]
-heatmaptable2Wpv$CD4pv <- final.table$CD4pv[match(heatmaptable2Wpv$Symbol, final.table$Symbol)]
-heatmaptable2Wpv$CD8pv <- final.table$CD8pv[match(heatmaptable2Wpv$Symbol, final.table$Symbol)]
-heatmaptable2Wpv$TREGpv <- final.table$TREGpv[match(heatmaptable2Wpv$Symbol, final.table$Symbol)]
-
-#turn insignificant p values to zero in the fold change
-heatmaptable2Wpv$FCapc[heatmaptable2Wpv$APCpv > 0.05] <- 0
-heatmaptable2Wpv$FCbcell[heatmaptable2Wpv$BCELLpv > 0.05] <- 0
-heatmaptable2Wpv$FCcd4[heatmaptable2Wpv$CD4pv > 0.05] <- 0
-heatmaptable2Wpv$FCcd8[heatmaptable2Wpv$CD8pv > 0.05] <- 0
-heatmaptable2Wpv$FCtreg[heatmaptable2Wpv$TREGpv > 0.05] <- 0
-
-# #dataframe with just fc values filtered by if the p value was significant
-# heatmaptable2Wpv[,2:6] %>% filter(heatmaptable2Wpv$APCpv < 0.05)
-# range(mutate_all(heatmaptable2[,2:6], function(x) as.numeric(as.character(x))))
-
-#melt new heatmaptable2 with NAs
-heatmaptable2WOpv <- as.data.frame(heatmaptable2Wpv[, 1:6])
-colnames(heatmaptable2WOpv) <- c("Symbol", "APC", "BCell", "CD4", "CD8", "TReg")
-heatmaptable2WOpv.m <- melt(heatmaptable2WOpv, id.vars = "Symbol", measure.vars = c("APC", "BCell", "CD4", "CD8", "TReg"))
-#change level order to stay in ordered way by better than
-heatmaptable2WOpv.m$Symbol <- factor(heatmaptable2WOpv.m$Symbol, levels = heatmaptable2ordered$Symbol)
-##gradientn
-#vals are in between pals, and zero is between white and grey on the left, use quant for between plum and tomato
-#in between gray is zero, whites and grays have to be extremely close, in between white and tomato is bottom value before plum (use the quantile)
-pals2 <- c("plum2", "plum2", "tomato2", "white", "white", "white", "gray90","gray90", "white", "white", "deepskyblue2") #zero at -46.153846
-vals2 <- c(1, 0.975, 0.9749, 0.464, 0.463, 0.462, 0.46153846, 0.460, 0.459, 0.458, 0)
- # 1, 0.985, 0.9849, 0.529, 0.528, 0.527, 0.52631579, 0.525, 0.524, 0.523, 0) #zero at -52.631579
-brks2 <- c(6, 0, -6)
-
-chr2HMint <- 
-ggplot(heatmaptable2WOpv.m, aes(variable, Symbol, fill = value)) +
-  geom_tile(color = "white") +
-  scale_fill_gradientn(name = "fold \nchange", 
-                       colours = pals2,
-                       values = vals2, 
-                       limits = c(-6, 7), 
-                       na.value = "plum2", 
-                       breaks = brks2) +
-  ggtitle(label = "Chr 2") + 
-  xlab("Cell Type") +
-  ylab("Chr 2 Genes") +
-  theme(axis.text = element_text(size=30), title = element_text(size = 30),
-        axis.title= element_text(size=30), 
-        legend.text = element_text(size=30),
-        legend.title = element_text(size = 30),
-        panel.background = element_rect(fill = "white"), 
-        axis.ticks.y = element_blank()) +
-  coord_fixed(ratio = 1/3)
-
-#ggsave("Chr2_heatmap.svg", height = 10, width = 10, units = "in")
-#ggsave("Chr2_heatmap.pdf")
-```
-
-
-
-```{r heatmap same plotsize width}
-#using ggarange
-# ggarrange(chr1HM, chr2HM, ncol = 1, heights = 10, widths = 10)
-# ggsave("chr1and2.svg")
-
-
-#using align_plots
-ap <- align_plots(chr1HM, chr2HM, align="v")
+C. Sizing and printing heatmaps
+```{r heatmap_save}
+#make heatmaps have same plotsize width
+ap <- align_plots(int_chr1_HM, int_chr2_HM, hemo_chr1_HM, hemo_chr2_HM, chr1_1to1_HM, chr2_1to1_HM, align = "v")
 
 ggdraw(ap[[1]])
-ggsave("chr1aligned.svg", height = 10, width = 10, units = "in")
-#align_plots` returns a list of plots that we can draw seperately, but whose panels will still be vertically aligned on the page.
-
+ggsave("int_chr1_heatmap.svg", path = figures.dir, height = 10, width = 10, units = "in")
 ggdraw(ap[[2]])
-ggsave("chr2aligned.svg", height = 10, width = 10, units = "in")
+ggsave("int_chr2_heatmap.svg", path = figures.dir, height = 10, width = 10, units = "in")
+ggdraw(ap[[3]])
+ggsave("hemo_chr1_heatmap.svg", path = figures.dir, height = 10, width = 10, units = "in")
+ggdraw(ap[[4]])
+ggsave("hemo_chr2_heatmap.svg", path = figures.dir, height = 10, width = 10, units = "in")
+ggdraw(ap[[5]])
+ggsave("chr1_1to1_heatmap.svg", path = figures.dir, height = 10, width = 10, units = "in")
+ggdraw(ap[[6]])
+ggsave("chr2_1to1_heatmap.svg", path = figures.dir, height = 10, width = 10, units = "in")
 ```
 
+## Supplemental/other
 
-
-
-
-
-
-
-```{r ggplot for heatmap 1:1 overlap chr1}
-
-#IBDGWAS 1:1 genes (from DK)
-chr1List <- c("Atp1b1", "Cacna1s", "Cd28", "F5", "Gpr35", "Nme7", "Ptprc", "Selp", "Slamf8")
-chr2list <- c("Ada", "Asxl1", "Cd40", "Il2ra", "Itga4", "Kif3b", "Pkig", "Serinc3", "Tm9sf4", "Ttpal")
-
-#but what about just the original list after we put more chr1 and 2
-#were these in the original SVM training?
-inTraining <- toupper(ALLprefALLtop[[1]]) %in% as.character(IBDGWASmouseEntrez[["name"]])
-#use ALLprefALLtop[[1]][inTraining] to see which were used in training (toupper is for case sensitivity)
-
-#all sig chr1 in GWAS
-chr1final.tableSIG <- final.tableSIG %>% filter(Chr==1)
-GWASchr1SIGapc <- IBDGWASmouseEntrez$name %in% toupper(chr1final.tableSIG$Symbol)
-#IBDGWASmouseEntrez$name[GWASchr1SIGapc]
-chr1final.table2SIG <- final.table2SIG %>% filter(Chr==1)
-GWASchr1SIGbcell <- IBDGWASmouseEntrez$name %in% toupper(chr1final.table2SIG$Symbol)
-chr1final.table3SIG <- final.table3SIG %>% filter(Chr==1)
-GWASchr1SIGcd4 <- IBDGWASmouseEntrez$name %in% toupper(chr1final.table3SIG$Symbol)
-chr1final.table4SIG <- final.table4SIG %>% filter(Chr==1)
-GWASchr1SIGcd8 <- IBDGWASmouseEntrez$name %in% toupper(chr1final.table4SIG$Symbol)
-chr1final.table5SIG <- final.table5SIG %>% filter(Chr==1)
-GWASchr1SIGtreg <- IBDGWASmouseEntrez$name %in% toupper(chr1final.table5SIG$Symbol)
-
-
-chr2final.tableSIG <- final.tableSIG %>% filter(Chr==2)
-GWASchr2SIGapc <- IBDGWASmouseEntrez$name %in% toupper(chr2final.tableSIG$Symbol)
-#IBDGWASmouseEntrez$name[GWASchr1SIGapc]
-chr2final.table2SIG <- final.table2SIG %>% filter(Chr==2)
-GWASchr2SIGbcell <- IBDGWASmouseEntrez$name %in% toupper(chr2final.table2SIG$Symbol)
-chr2final.table3SIG <- final.table3SIG %>% filter(Chr==2)
-GWASchr2SIGcd4 <- IBDGWASmouseEntrez$name %in% toupper(chr2final.table3SIG$Symbol)
-chr2final.table4SIG <- final.table4SIG %>% filter(Chr==2)
-GWASchr2SIGcd8 <- IBDGWASmouseEntrez$name %in% toupper(chr2final.table4SIG$Symbol)
-chr2final.table5SIG <- final.table5SIG %>% filter(Chr==2)
-GWASchr2SIGtreg <- IBDGWASmouseEntrez$name %in% toupper(chr2final.table5SIG$Symbol)
-
-chr2final.tableSIG <- final
-GWASch1and2 <- IBDGWASmouseEntrez$name %in% toupper(DEGchr1and2$Symbol)
-#IBDGWASmouseEntrez$name[GWASch1and2]
-
-
-
-chr1listheatmaptableAPC <- 
-  final.tableTRANS %>%
-  filter(Symbol %in% chr1List)
-  
-chr1listheatmaptableBCELL <- 
-  final.table2TRANS %>%
-  filter(Symbol %in% chr1List)
-
-chr1listheatmaptableCD4 <-
-  final.table3TRANS %>%
- filter(Symbol %in% chr1List)
-
-chr1listheatmaptableCD8 <- 
-  final.table4TRANS %>%
-  filter(Symbol %in% chr1List)
-
-chr1listheatmaptableTREG <- 
-  final.table5TRANS %>%
-  filter(Symbol %in% chr1List)
-
-#get FC for each cell type from all the tables
-chr1listheatmaptable <- 
-  rbind((cbind(chr1listheatmaptableAPC$Symbol,chr1listheatmaptableAPC$Fold.Change.PWD...APCs.vs..B6...APCs., chr1listheatmaptableAPC$Fold.Change.PWD...Bcells.vs..B6...Bcells., chr1listheatmaptableAPC$Fold.Change.PWD...CD4.vs..B6...CD4., chr1listheatmaptableAPC$Fold.Change.PWD...CD8.vs..B6...CD8., chr1listheatmaptableAPC$Fold.Change.PWD...Tregs.vs..B6...Tregs., chr1listheatmaptableAPC$BetterThan)), 
-        (cbind(chr1listheatmaptableBCELL$Symbol, chr1listheatmaptableBCELL$Fold.Change.PWD...APCs.vs..B6...APCs., chr1listheatmaptableBCELL$Fold.Change.PWD...Bcells.vs..B6...Bcells., chr1listheatmaptableBCELL$Fold.Change.PWD...CD4.vs..B6...CD4., chr1listheatmaptableBCELL$Fold.Change.PWD...CD8.vs..B6...CD8., chr1listheatmaptableBCELL$Fold.Change.PWD...Tregs.vs..B6...Tregs., chr1listheatmaptableBCELL$BetterThan)), 
-        (cbind(chr1listheatmaptableCD4$Symbol, chr1listheatmaptableCD4$Fold.Change.PWD...APCs.vs..B6...APCs., chr1listheatmaptableCD4$Fold.Change.PWD...Bcells.vs..B6...Bcells., chr1listheatmaptableCD4$Fold.Change.PWD...CD4.vs..B6...CD4., chr1listheatmaptableCD4$Fold.Change.PWD...CD8.vs..B6...CD8., chr1listheatmaptableCD4$Fold.Change.PWD...Tregs.vs..B6...Tregs., chr1listheatmaptableCD4$BetterThan)), 
-        (cbind(chr1listheatmaptableCD8$Symbol, chr1listheatmaptableCD8$Fold.Change.PWD...APCs.vs..B6...APCs., chr1listheatmaptableCD8$Fold.Change.PWD...Bcells.vs..B6...Bcells., chr1listheatmaptableCD8$Fold.Change.PWD...CD4.vs..B6...CD4., chr1listheatmaptableCD8$Fold.Change.PWD...CD8.vs..B6...CD8., chr1listheatmaptableCD8$Fold.Change.PWD...Tregs.vs..B6...Tregs., chr1listheatmaptableCD8$BetterThan)), 
-        (cbind(chr1listheatmaptableTREG$Symbol, chr1listheatmaptableTREG$Fold.Change.PWD...APCs.vs..B6...APCs., chr1listheatmaptableTREG$Fold.Change.PWD...Bcells.vs..B6...Bcells., chr1listheatmaptableTREG$Fold.Change.PWD...CD4.vs..B6...CD4., chr1listheatmaptableTREG$Fold.Change.PWD...CD8.vs..B6...CD8., chr1listheatmaptableTREG$Fold.Change.PWD...Tregs.vs..B6...Tregs., chr1listheatmaptableTREG$BetterThan)))
-
-#change column names to be able to work with
-chr1listheatmaptable <- as.data.frame(chr1listheatmaptable)
-colnames(chr1listheatmaptable) <- c("Symbol", "FCapc", "FCbcell", "FCcd4", "FCcd8", "FCtreg", "BetterThan")
-
-#take out duplicates and just use top ranked line
-chr1listheatmaptable <- 
-  chr1listheatmaptable %>%
-  group_by(Symbol) %>%
-  top_n(1, BetterThan) %>%
-  distinct(Symbol, .keep_all= TRUE) %>%
-  ungroup()
-
-#drop unused levels 
-chr1listheatmaptable <- droplevels.data.frame(chr1listheatmaptable)
-#order by better than
-chr1listheatmaptableordered <- as.data.frame(chr1listheatmaptable[order(as.numeric(as.character(chr1listheatmaptable$BetterThan)), decreasing = FALSE),][ , 1:6])
-
-#have to reshape table
-chr1listheatmaptableordered$FCapc <- as.numeric(as.character((chr1listheatmaptableordered$FCapc)))
-chr1listheatmaptableordered$FCbcell <- as.numeric(as.character((chr1listheatmaptableordered$FCbcell)))
-chr1listheatmaptableordered$FCcd4 <- as.numeric(as.character((chr1listheatmaptableordered$FCcd4)))
-chr1listheatmaptableordered$FCcd8 <- as.numeric(as.character((chr1listheatmaptableordered$FCcd8)))
-chr1listheatmaptableordered$FCtreg <- as.numeric(as.character((chr1listheatmaptableordered$FCtreg)))
-
-#melt to be able to use in ggplot
-chr1listheatmaptableordered.m <- melt(chr1listheatmaptableordered)
-#change level order to stay in ordered way by better than
-chr1listheatmaptableordered.m$Symbol <- factor(chr1listheatmaptableordered.m$Symbol, levels = chr1listheatmaptableordered.m$Symbol[order(chr1listheatmaptableordered$Symbol)])
-
-
-#heatmap
-
-#get range to be able to find the limits for ggplot (then can use this to do breaks)
-allFCch1list <- c(chr1listheatmaptableordered$FCapc, chr1listheatmaptableordered$FCbcell, chr1listheatmaptableordered$FCcd4, chr1listheatmaptableordered$FCcd8, chr1listheatmaptableordered$FCtreg)
-chr1range <- range(allFCch1list)
-# range = -10 to 53
-#find second last value for break
-FindingSecondInRange2 <- allFCch2[allFCch2!=max(range)]
-#use min(FindingSecondInRange) to find the second to last number in range
-###### use hist(chr1listheatmaptableordered.m$value) instead because there are multiple higher values
-
-
-#find where to put the breaks - this is just to visualize and map what number to put for which break value
-Breakschr1list <- as.data.frame(seq(4, -8))
-Breakschr1list$values <- seq(-100, 0, length.out = 13)
-
-#pick out the gene/cell combo that have sig p values 
-chr1listheatmaptableWpv <- chr1listheatmaptableordered
-chr1listheatmaptableWpv$APCpv <- final.table$APCpv[match(chr1listheatmaptableWpv$Symbol, final.table$Symbol)]
-chr1listheatmaptableWpv$BCELLpv <- final.table$BCELLpv[match(chr1listheatmaptableWpv$Symbol, final.table$Symbol)]
-chr1listheatmaptableWpv$CD4pv <- final.table$CD4pv[match(chr1listheatmaptableWpv$Symbol, final.table$Symbol)]
-chr1listheatmaptableWpv$CD8pv <- final.table$CD8pv[match(chr1listheatmaptableWpv$Symbol, final.table$Symbol)]
-chr1listheatmaptableWpv$TREGpv <- final.table$TREGpv[match(chr1listheatmaptableWpv$Symbol, final.table$Symbol)]
-
-#turn insignificant p values to zero in the fold change
-chr1listheatmaptableWpv$FCapc[chr1listheatmaptableWpv$APCpv > 0.05] <- 0
-chr1listheatmaptableWpv$FCbcell[chr1listheatmaptableWpv$BCELLpv > 0.05] <- 0
-chr1listheatmaptableWpv$FCcd4[chr1listheatmaptableWpv$CD4pv > 0.05] <- 0
-chr1listheatmaptableWpv$FCcd8[chr1listheatmaptableWpv$CD8pv > 0.05] <- 0
-chr1listheatmaptableWpv$FCtreg[chr1listheatmaptableWpv$TREGpv > 0.05] <- 0
-
-# #dataframe with just fc values filtered by if the p value was significant
-# chr1listheatmaptableWpv[,2:6] %>% filter(chr1listheatmaptableWpv$APCpv < 0.05)
-# range(mutate_all(chr1listheatmaptable[,2:6], function(x) as.numeric(as.character(x))))
-
-#melt new chr1listheatmaptable with NAs
-chr1listheatmaptableWOpv <- as.data.frame(chr1listheatmaptableWpv[, 1:6])
-colnames(chr1listheatmaptableWOpv) <- c("Symbol", "APC", "BCell", "CD4", "CD8", "TReg")
-chr1listheatmaptableWOpv.m <- melt(chr1listheatmaptableWOpv, id.vars = "Symbol", measure.vars = c("APC", "BCell", "CD4", "CD8", "TReg"))
-
-#change level order to stay in ordered way by better than
-chr1listheatmaptableWOpv.m$Symbol <- factor(chr1listheatmaptableWOpv.m$Symbol, levels = chr1listheatmaptableordered$Symbol)
-
-##gradientn
-palschr1 <- c("tomato3", "white", "gray85", "white", "deepskyblue2")
-valschr1 <- c(1, 0.67, 0.66, 0.65, 0)
-
-ggplot(chr1listheatmaptableWOpv.m, aes(variable, Symbol, fill = value)) +
-  geom_tile(color = "white") +
-  #theme_bw() +
-  scale_fill_gradientn(name = "fold change", 
-                       colours = palschr1,
-                       values = valschr1, 
-                       limits = c(-8, 4)) +
-                       #limits = c(floor(range[1]), ceiling(range[2])),
-                       #breaks = brks, 
-                       #labels = labels) +
-  ggtitle("IBD Candidates 1:1 \n(Intestinal Funtional Network)") + 
-  xlab("Cell Type") +
-  ylab("Chromosome 1 \nGenes") +
-  theme(axis.text = element_text(size=14),
-        axis.title= element_text(size=17), 
-        panel.background = element_rect(fill = "white"), 
-        axis.ticks.y = element_blank())
-
-ggsave("IBD1to1_Chr1_heatmap.svg")
-ggsave("IBD1to1_Chr1_heatmap.pdf")
+```{r other_sup}
+top.total <- bind_rows(chr1.int.hm.table, chr2.int.hm.table, chr1.hemo.hm.table, chr2.hemo.hm.table)
+top.in.training <- inner_join(top.total, IBD.gconvert, by = c("Symbol" = "input"))
+final.table.combined <- bind_rows(int.final.table, hemo.final.table)
 ```
 
+## Ccc1 locus
 
+In order to evaluate the Ccc1 locus, we had to copy the int and hemo results into new folders to be able to use "score.candidates" again using the Ccc1 locus genes
+A. Score candidates 
+```{r score_candidates_ccc1}
+results.Ccc1.int.dir <- here("Results_Ccc1_int")
+results.Ccc1.hemo.dir <- here("Results_Ccc1_hemo")
 
+DEG.Ccc1 <- inner_join(DEG.all, Ccc1.gene.info, by = "Symbol")
 
-
-
-
-
-
-
-
-
-
-
-
-
-######this is where all the other heatmap attempts begin - don't know if need any of this later
-
-
-
-
-
-```{r don't use this one}
-#chr. 1
-
-
-heatmaptableAPC <- 
-  final.tableTRANS %>%
-  filter(Chr ==1) %>%
-  filter(Symbol %in% c(as.character(pref[[1]]), as.character(top10_1[[1]])))
-  
-
-heatmaptableBCELL <- 
-  final.table2TRANS %>%
-  filter(Chr ==1) %>%
-  filter(Symbol %in% c(as.character(pref2[[1]]), as.character(top10_2[[1]])))
-
-heatmaptableCD4 <-
-  final.table3TRANS %>%
-  filter(Chr ==1) %>%
-  filter(Symbol %in% c(as.character(pref3[[1]]), as.character(top10_3[[1]])))
-
-heatmaptableCD8 <- 
-  final.table4TRANS %>%
-  filter(Chr ==1) %>%
-  filter(Symbol %in% c(as.character(pref4[[1]]), as.character(top10_4[[1]])))
-
-heatmaptableTREG <- 
-  final.table5TRANS %>%
-  filter(Chr ==1) %>%
-  filter(Symbol %in% c(as.character(pref5[[1]]), as.character(top10_5[[1]])))
-
-heatmaptable <- 
-  rbind((cbind(heatmaptableAPC$Symbol,heatmaptableAPC$Fold.Change.PWD...APCs.vs..B6...APCs., heatmaptableAPC$Fold.Change.PWD...Bcells.vs..B6...Bcells., heatmaptableAPC$Fold.Change.PWD...CD4.vs..B6...CD4., heatmaptableAPC$Fold.Change.PWD...CD8.vs..B6...CD8., heatmaptableAPC$Fold.Change.PWD...Tregs.vs..B6...Tregs., heatmaptableAPC$BetterThan)), 
-        (cbind(heatmaptableBCELL$Symbol, heatmaptableBCELL$Fold.Change.PWD...APCs.vs..B6...APCs., heatmaptableBCELL$Fold.Change.PWD...Bcells.vs..B6...Bcells., heatmaptableBCELL$Fold.Change.PWD...CD4.vs..B6...CD4., heatmaptableBCELL$Fold.Change.PWD...CD8.vs..B6...CD8., heatmaptableBCELL$Fold.Change.PWD...Tregs.vs..B6...Tregs., heatmaptableBCELL$BetterThan)), 
-        (cbind(heatmaptableCD4$Symbol, heatmaptableCD4$Fold.Change.PWD...APCs.vs..B6...APCs., heatmaptableCD4$Fold.Change.PWD...Bcells.vs..B6...Bcells., heatmaptableCD4$Fold.Change.PWD...CD4.vs..B6...CD4., heatmaptableCD4$Fold.Change.PWD...CD8.vs..B6...CD8., heatmaptableCD4$Fold.Change.PWD...Tregs.vs..B6...Tregs., heatmaptableCD4$BetterThan)), 
-        (cbind(heatmaptableCD8$Symbol, heatmaptableCD8$Fold.Change.PWD...APCs.vs..B6...APCs., heatmaptableCD8$Fold.Change.PWD...Bcells.vs..B6...Bcells., heatmaptableCD8$Fold.Change.PWD...CD4.vs..B6...CD4., heatmaptableCD8$Fold.Change.PWD...CD8.vs..B6...CD8., heatmaptableCD8$Fold.Change.PWD...Tregs.vs..B6...Tregs., heatmaptableCD8$BetterThan)), 
-        (cbind(heatmaptableTREG$Symbol, heatmaptableTREG$Fold.Change.PWD...APCs.vs..B6...APCs., heatmaptableTREG$Fold.Change.PWD...Bcells.vs..B6...Bcells., heatmaptableTREG$Fold.Change.PWD...CD4.vs..B6...CD4., heatmaptableTREG$Fold.Change.PWD...CD8.vs..B6...CD8., heatmaptableTREG$Fold.Change.PWD...Tregs.vs..B6...Tregs., heatmaptableTREG$BetterThan)))
-
-
-colnames(heatmaptable) <- c("Symbol", "FCapc", "FCbcell", "FCcd4", "FCcd8", "FCtreg", "BetterThan")
-heatmaptable <- unique(heatmaptable)
-rownames(heatmaptable) <- heatmaptable[,1]
-class(heatmaptable) <- "numeric"
-heatmaptable <- heatmaptable[, 2:7]
-heatmaptableordered <- heatmaptable[order(-heatmaptable[,6]),]
-
-##note - there are two duplicates in heatmaptable for chr 1 because two of the same genes were filtered in different cell types for their p value, but one of the probes had one set of FC values, and the other probe had a diff set, and in one cell the first p value corresponding to those FCs was lower, and then in another cell a diff p value was lower - hence why two different set of FCs
-
-#chr 2
-
-heatmaptable2APC <- 
-  final.tableTRANS %>%
-  filter(Chr ==2) %>%
-  filter(Symbol %in% c(as.character(pref[[1]]), as.character(top10_1[[1]])))
-
-heatmaptable2BCELL <- 
-  final.table2TRANS %>%
-  filter(Chr ==2) %>%
-  filter(Symbol %in% c(as.character(pref2[[1]]), as.character(top10_2[[1]])))
-
-heatmaptable2CD4 <-
-  final.table3TRANS %>%
-  filter(Chr ==2) %>%
-  filter(Symbol %in% c(as.character(pref3[[1]]), as.character(top10_3[[1]])))
-
-heatmaptable2CD8 <- 
-  final.table4TRANS %>%
-  filter(Chr ==2) %>%
-  filter(Symbol %in% c(as.character(pref4[[1]]), as.character(top10_4[[1]])))
-
-heatmaptable2TREG <- 
-  final.table5TRANS %>%
-  filter(Chr ==2) %>%
-  filter(Symbol %in% c(as.character(pref5[[1]]), as.character(top10_5[[1]])))
-
-      
-heatmaptable2 <- rbind((cbind(heatmaptable2APC$Symbol,heatmaptable2APC$Fold.Change.PWD...APCs.vs..B6...APCs., heatmaptable2APC$Fold.Change.PWD...Bcells.vs..B6...Bcells., heatmaptable2APC$Fold.Change.PWD...CD4.vs..B6...CD4., heatmaptable2APC$Fold.Change.PWD...CD8.vs..B6...CD8., heatmaptable2APC$Fold.Change.PWD...Tregs.vs..B6...Tregs., heatmaptable2APC$BetterThan)), 
-                       (cbind(heatmaptable2BCELL$Symbol, heatmaptable2BCELL$Fold.Change.PWD...APCs.vs..B6...APCs., heatmaptable2BCELL$Fold.Change.PWD...Bcells.vs..B6...Bcells., heatmaptable2BCELL$Fold.Change.PWD...CD4.vs..B6...CD4., heatmaptable2BCELL$Fold.Change.PWD...CD8.vs..B6...CD8., heatmaptable2BCELL$Fold.Change.PWD...Tregs.vs..B6...Tregs., heatmaptable2BCELL$BetterThan)), 
-                       (cbind(heatmaptable2CD4$Symbol, heatmaptable2CD4$Fold.Change.PWD...APCs.vs..B6...APCs., heatmaptable2CD4$Fold.Change.PWD...Bcells.vs..B6...Bcells., heatmaptable2CD4$Fold.Change.PWD...CD4.vs..B6...CD4., heatmaptable2CD4$Fold.Change.PWD...CD8.vs..B6...CD8., heatmaptable2CD4$Fold.Change.PWD...Tregs.vs..B6...Tregs., heatmaptable2CD4$BetterThan)), 
-                       (cbind(heatmaptable2CD8$Symbol, heatmaptable2CD8$Fold.Change.PWD...APCs.vs..B6...APCs., heatmaptable2CD8$Fold.Change.PWD...Bcells.vs..B6...Bcells., heatmaptable2CD8$Fold.Change.PWD...CD4.vs..B6...CD4., heatmaptable2CD8$Fold.Change.PWD...CD8.vs..B6...CD8., heatmaptable2CD8$Fold.Change.PWD...Tregs.vs..B6...Tregs., heatmaptable2CD8$BetterThan)), 
-                       (cbind(heatmaptable2TREG$Symbol, heatmaptable2TREG$Fold.Change.PWD...APCs.vs..B6...APCs., heatmaptable2TREG$Fold.Change.PWD...Bcells.vs..B6...Bcells., heatmaptable2TREG$Fold.Change.PWD...CD4.vs..B6...CD4., heatmaptable2TREG$Fold.Change.PWD...CD8.vs..B6...CD8., heatmaptable2TREG$Fold.Change.PWD...Tregs.vs..B6...Tregs., heatmaptable2TREG$BetterThan)))
-
-colnames(heatmaptable2) <- c("Symbol", "FCapc", "FCbcell", "FCcd4", "FCcd8", "FCtreg", "BetterThan")
-heatmaptable2 <- unique(heatmaptable2)
-rownames(heatmaptable2) <- heatmaptable2[,1]
-class(heatmaptable2) <- "numeric"
-heatmaptable2 <- heatmaptable2[, 2:7]
-heatmaptable2ordered <- heatmaptable2[order(-heatmaptable2[,6]),]
-
-```
-## HEATMAP CHR 1
-
-```{r don't use this one either}
-##make heatmap
-#CHR 1
-mpto1t5 <- heatmaptableordered[,1:5]
-lessthan2 <- mpto1t5[abs(heatmaptableordered[,1:5]) <= 2]
-lessthan2 <- heatmaptableordered %in% lessthan2
-heatmaptableordered[lessthan2] <- 0
-
-
-#quantile breaks: 
-quantileRange <- quantile(heatmaptableordered[,1:5], probs = seq(0, 1, 0.01))
-paletteBreaks <- seq(quantileRange["5%"], quantileRange["95%"], 0.1)
-
-
-breaksList = seq(-55, 55, by = 1)
-
-pheatmap(heatmaptableordered[,1:5], 
-         cluster_rows = F, 
-         cluster_cols = F, 
-         show_rownames = T, 
-         show_colnames = T, 
-         color = colorRampPalette(rev(brewer.pal(n = 7, name = "RdBu")))(length(breaksList)), # Defines the vector of colors for the legend (it has to be of the same lenght of breaksList) 
-         breaks = breaksList) # Sets the breaks of the color scale as in breaksList)
-
-
-
-
-#change row/gene name to have final score
-for(i in 1:length(heatmaptableordered[,1])){
-  name.i <- as.character(rownames(heatmaptableordered)[i])
-  finalscore.i <- round(heatmaptableordered[i,6], 2)
-  rownames(heatmaptableordered)[i] <- paste(name.i, finalscore.i, sep =" : ")
-}
-
-#pheatmap done with Z score
-pdf("chr1_heatmap.pdf")
-pheatmap(heatmaptableordered[,1:5], 
-         cluster_rows = F, 
-         cluster_cols = F, 
-         show_rownames = T, 
-         show_colnames = T, 
-         color = colorRampPalette(rev(brewer.pal(n = 7, name = "RdBu")))(length(paletteBreaks)), 
-         breaks = paletteBreaks, 
-         main = "Chromosome 1: \nheatmap of fold change for pareto front genes\n ranked by final score (-log FP + -log DEGpv)")
-dev.off()
+#1. Intestine
+score.candidates(results.Ccc1.int.dir, candidate.genes = DEG.Ccc1$EntrezID.x)
+#2. Hemolymphoid
+score.candidates(results.Ccc1.hemo.dir, candidate.genes = DEG.Ccc1$EntrezID.x)
 ```
 
-
-##test - redoing heatmaptables, and then using ggplot instead **just the next two chunks - regroups after that
-
-
-## HEATMAP CHR2
-
-```{r this was another test}
-mpto1t52 <- heatmaptable2ordered[,1:5]
-lessthan2 <- mpto1t52[abs(heatmaptable2ordered[,1:5]) <= 2]
-lessthan2 <- heatmaptable2ordered %in% lessthan2
-heatmaptable2ordered[lessthan2] <- 0
-
-
-breaksList = seq(-50, 50, by = 1)
-#pheatmap(heatmaptable2ordered[,1:5], cluster_rows = F, cluster_cols = F, show_rownames = T, show_colnames = T, color = colorRampPalette(rev(brewer.pal(n = 7, name = "RdBu")))(length(breaksList)), # Defines the vector of colors for the legend (it has to be of the same lenght of breaksList)
- #        breaks = breaksList) # Sets the breaks of the color scale as in breaksList)
-
-#rename gene/row to have final score
-for(i in 1:length(heatmaptable2ordered[,1])){
-  name.i <- as.character(rownames(heatmaptable2ordered)[i])
-  finalscore.i <- round(heatmaptable2ordered[i,6], 2)
-  rownames(heatmaptable2ordered)[i] <- paste(name.i, finalscore.i, sep =" : ")
-}
-#done with Z score
-pdf("chr2_heatmap.pdf")
-pheatmap(heatmaptable2ordered[,1:5], cluster_rows = F, cluster_cols = F, show_rownames = T, show_colnames = T,scale = "column", color = colorRampPalette(rev(brewer.pal(n = 7, name = "RdBu")))(length(breaksList)), main = "Chromosome 2: \nheatmap of fold change for pareto front genes\n ranked by final score (-log FP + -log DEGpv)")
-dev.off()
-```
-
-
-#making heatmap table from all top 10 only (not accounting for any others on pareto front)
-```{r heatmap top 10}
-#chr. 1
-
-heatmaptableTOPAPC <- 
-  final.tableTRANS %>%
-  filter(Chr ==1) %>%
-  filter(Symbol %in% as.character(top10_1[[1]]))
-
-heatmaptableTOPBCELL <- 
-  final.table2TRANS %>%
-  filter(Chr ==1) %>%
-  filter(Symbol %in% as.character(top10_2[[1]]))
-
-heatmaptableTOPCD4 <-
-  final.table3TRANS %>%
-  filter(Chr ==1) %>%
-  filter(Symbol %in% as.character(top10_3[[1]]))
-
-heatmaptableTOPCD8 <- 
-  final.table4TRANS %>%
-  filter(Chr ==1) %>%
-  filter(Symbol %in% as.character(top10_4[[1]]))
-
-heatmaptableTOPTREG <- 
-  final.table5TRANS %>%
-  filter(Chr ==1) %>%
-  filter(Symbol %in% as.character(top10_5[[1]]))
-
-heatmaptableTOP10 <- 
-  rbind((cbind(heatmaptableTOPAPC$Symbol,heatmaptableTOPAPC$Fold.Change.PWD...APCs.vs..B6...APCs., heatmaptableTOPAPC$Fold.Change.PWD...Bcells.vs..B6...Bcells., heatmaptableTOPAPC$Fold.Change.PWD...CD4.vs..B6...CD4., heatmaptableTOPAPC$Fold.Change.PWD...CD8.vs..B6...CD8., heatmaptableTOPAPC$Fold.Change.PWD...Tregs.vs..B6...Tregs.)), 
-        (cbind(heatmaptableTOPBCELL$Symbol, heatmaptableTOPBCELL$Fold.Change.PWD...APCs.vs..B6...APCs., heatmaptableTOPBCELL$Fold.Change.PWD...Bcells.vs..B6...Bcells., heatmaptableTOPBCELL$Fold.Change.PWD...CD4.vs..B6...CD4., heatmaptableTOPBCELL$Fold.Change.PWD...CD8.vs..B6...CD8., heatmaptableTOPBCELL$Fold.Change.PWD...Tregs.vs..B6...Tregs.)), 
-        (cbind(heatmaptableTOPCD4$Symbol, heatmaptableTOPCD4$Fold.Change.PWD...APCs.vs..B6...APCs., heatmaptableTOPCD4$Fold.Change.PWD...Bcells.vs..B6...Bcells., heatmaptableTOPCD4$Fold.Change.PWD...CD4.vs..B6...CD4., heatmaptableTOPCD4$Fold.Change.PWD...CD8.vs..B6...CD8., heatmaptableTOPCD4$Fold.Change.PWD...Tregs.vs..B6...Tregs.)), 
-        (cbind(heatmaptableTOPCD8$Symbol, heatmaptableTOPCD8$Fold.Change.PWD...APCs.vs..B6...APCs., heatmaptableTOPCD8$Fold.Change.PWD...Bcells.vs..B6...Bcells., heatmaptableTOPCD8$Fold.Change.PWD...CD4.vs..B6...CD4., heatmaptableTOPCD8$Fold.Change.PWD...CD8.vs..B6...CD8., heatmaptableTOPCD8$Fold.Change.PWD...Tregs.vs..B6...Tregs.)), 
-        (cbind(heatmaptableTOPTREG$Symbol, heatmaptableTOPTREG$Fold.Change.PWD...APCs.vs..B6...APCs., heatmaptableTOPTREG$Fold.Change.PWD...Bcells.vs..B6...Bcells., heatmaptableTOPTREG$Fold.Change.PWD...CD4.vs..B6...CD4., heatmaptableTOPTREG$Fold.Change.PWD...CD8.vs..B6...CD8., heatmaptableTOPTREG$Fold.Change.PWD...Tregs.vs..B6...Tregs.)))
-
-
-colnames(heatmaptableTOP10) <- c("Symbol", "FCapc", "FCbcell", "FCcd4", "FCcd8", "FCtreg")
-heatmaptableTOP10 <- unique(heatmaptableTOP10)
-
-
-rownames(heatmaptableTOP10) <- heatmaptableTOP10[,1]
-class(heatmaptableTOP10) <- "numeric"
-heatmaptableTOP10 <- heatmaptableTOP10[, 2:6]
-heatmaptableTOP10ordered <- heatmaptableTOP10[order(-heatmaptableTOP10[,6]),]
-
-```
-
-```{r heatmap top 10}
-##make heatmap
-#CHR 1
-mpto1t5 <- heatmaptableTOP10[,1:5]
-lessthan2 <- mpto1t5[abs(heatmaptableTOP10[,1:5]) <= 2]
-lessthan2 <- heatmaptableTOP10 %in% lessthan2
-heatmaptableTOP10[lessthan2] <- 0
-
-
-#quantile breaks: 
-quantileRange <- quantile(heatmaptableTOP10[,1:5], probs = seq(0, 1, 0.01))
-paletteBreaks <- seq(quantileRange["5%"], quantileRange["95%"], 0.1)
-
-
-breaksList = seq(-10, 3, by = 1)
-
-pheatmap(heatmaptableTOP10[,1:5], 
-         cluster_rows = F, 
-         cluster_cols = F, 
-         show_rownames = T, 
-         show_colnames = T, 
-         color = colorRampPalette(rev(brewer.pal(n = 7, name = "RdBu")))(length(breaksList)), # Defines the vector of colors for the legend (it has to be of the same lenght of breaksList) 
-         breaks = breaksList) # Sets the breaks of the color scale as in breaksList)
-ggsave("HL_chr1_heatmap.pdf")
-
-pheatmap(heatmaptableTOP10, cluster_rows = F, cluster_cols = F, show_rownames = T, show_colnames = T, colors = colors.from.values(heatmaptableTOP10))
-
-
-pdf("HL_chr1_heatmap.pdf")
-pheatmap(heatmaptableTOP10, 
-         cluster_rows = F, 
-         cluster_cols = F, 
-         show_rownames = T, 
-         show_colnames = T, 
-         color = colors.from.values(heatmaptableTOP10[,1], split.at.vals = TRUE))
-
-
-
-#change row/gene name to have final score
-for(i in 1:length(heatmaptableTOP10[,1])){
-  name.i <- as.character(rownames(heatmaptableTOP10)[i])
-  finalscore.i <- round(heatmaptableTOP10[i,6], 2)
-  rownames(heatmaptableTOP10)[i] <- paste(name.i, finalscore.i, sep =" : ")
-}
-
-#pheatmap done with Z score
-pdf("chr1_heatmap.pdf")
-pheatmap(heatmaptableTOP10[,1:5], 
-         cluster_rows = F, 
-         cluster_cols = F, 
-         show_rownames = T, 
-         show_colnames = T, 
-         color = colorRampPalette(rev(brewer.pal(n = 7, name = "RdBu")))(length(paletteBreaks)), 
-         breaks = paletteBreaks, 
-         main = "Chromosome 1: \nheatmap of fold change for pareto front genes\n ranked by final score (-log FP + -log DEGpv)")
-dev.off()
-```
-
-```{r pheatmap instead}
-pdf("chr1_heatmap.pdf")
-pheatmap(heatmaptableTOP10[,1:5], 
-         cluster_rows = F, 
-         cluster_cols = F, 
-         show_rownames = T, 
-         show_colnames = T, 
-         color = colorRampPalette(rev(brewer.pal(n = 7, name = "RdBu")))(length(breaksList)), # Defines the vector of colors for the legend (it has to be of the same lenght of breaksList) 
-         breaks = breaksList) # Sets the breaks of the color scale as in breaksList)
-dev.off()
-```
-```{r}
-pdf("chr1_heatmap.pdf")
-pheatmap(heatmaptable2TOP10[,1:5], 
-         cluster_rows = F, 
-         cluster_cols = F, 
-         show_rownames = T, 
-         show_colnames = T, 
-         color = colorRampPalette(rev(brewer.pal(n = 7, name = "RdBu")))(length(breaksList)), # Defines the vector of colors for the legend (it has to be of the same lenght of breaksList) 
-         breaks = breaksList) # Sets the breaks of the color scale as in breaksList)
-dev.off()
+B. Merge tables
+```{r merge_Ccc1}
+#1. Intestine
+int.Ccc1.final.table <- merge.gene.svm.fp(results.Ccc1.int.dir, gene.info.table = DEG.Ccc1, gene.column.name = "EntrezID.x")
+#2. Hemolymphoid
+hemo.Ccc1.final.table <- merge.gene.svm.fp(results.Ccc1.hemo.dir, gene.info.table = DEG.Ccc1, gene.column.name = "EntrezID.x")
 ```
 
 ```{r}
-
-
-
-#chr. 2
-
-heatmaptable2TOPAPC <- 
-  final.tableTRANS %>%
-  filter(Chr ==2) %>%
-  filter(Symbol %in% as.character(top10_1[[1]]))
-
-heatmaptable2TOPBCELL <- 
-  final.table2TRANS %>%
-  filter(Chr ==2) %>%
-  filter(Symbol %in% as.character(top10_2[[1]]))
-
-heatmaptable2TOPCD4 <-
-  final.table3TRANS %>%
-  filter(Chr ==2) %>%
-  filter(Symbol %in% as.character(top10_3[[1]]))
-
-heatmaptable2TOPCD8 <- 
-  final.table4TRANS %>%
-  filter(Chr ==2) %>%
-  filter(Symbol %in% as.character(top10_4[[1]]))
-
-heatmaptable2TOPTREG <- 
-  final.table5TRANS %>%
-  filter(Chr ==2) %>%
-  filter(Symbol %in% as.character(top10_5[[1]]))
-
-heatmaptable2TOP10 <- 
-  rbind((cbind(heatmaptable2TOPAPC$Symbol,heatmaptable2TOPAPC$Fold.Change.PWD...APCs.vs..B6...APCs., heatmaptable2TOPAPC$Fold.Change.PWD...Bcells.vs..B6...Bcells., heatmaptable2TOPAPC$Fold.Change.PWD...CD4.vs..B6...CD4., heatmaptable2TOPAPC$Fold.Change.PWD...CD8.vs..B6...CD8., heatmaptable2TOPAPC$Fold.Change.PWD...Tregs.vs..B6...Tregs.)), 
-        (cbind(heatmaptable2TOPBCELL$Symbol, heatmaptable2TOPBCELL$Fold.Change.PWD...APCs.vs..B6...APCs., heatmaptable2TOPBCELL$Fold.Change.PWD...Bcells.vs..B6...Bcells., heatmaptable2TOPBCELL$Fold.Change.PWD...CD4.vs..B6...CD4., heatmaptable2TOPBCELL$Fold.Change.PWD...CD8.vs..B6...CD8., heatmaptable2TOPBCELL$Fold.Change.PWD...Tregs.vs..B6...Tregs.)), 
-        (cbind(heatmaptable2TOPCD4$Symbol, heatmaptable2TOPCD4$Fold.Change.PWD...APCs.vs..B6...APCs., heatmaptable2TOPCD4$Fold.Change.PWD...Bcells.vs..B6...Bcells., heatmaptable2TOPCD4$Fold.Change.PWD...CD4.vs..B6...CD4., heatmaptable2TOPCD4$Fold.Change.PWD...CD8.vs..B6...CD8., heatmaptable2TOPCD4$Fold.Change.PWD...Tregs.vs..B6...Tregs.)), 
-        (cbind(heatmaptable2TOPCD8$Symbol, heatmaptable2TOPCD8$Fold.Change.PWD...APCs.vs..B6...APCs., heatmaptable2TOPCD8$Fold.Change.PWD...Bcells.vs..B6...Bcells., heatmaptable2TOPCD8$Fold.Change.PWD...CD4.vs..B6...CD4., heatmaptable2TOPCD8$Fold.Change.PWD...CD8.vs..B6...CD8., heatmaptable2TOPCD8$Fold.Change.PWD...Tregs.vs..B6...Tregs.)), 
-        (cbind(heatmaptable2TOPTREG$Symbol, heatmaptable2TOPTREG$Fold.Change.PWD...APCs.vs..B6...APCs., heatmaptable2TOPTREG$Fold.Change.PWD...Bcells.vs..B6...Bcells., heatmaptable2TOPTREG$Fold.Change.PWD...CD4.vs..B6...CD4., heatmaptable2TOPTREG$Fold.Change.PWD...CD8.vs..B6...CD8., heatmaptable2TOPTREG$Fold.Change.PWD...Tregs.vs..B6...Tregs.)))
-
-
-colnames(heatmaptable2TOP10) <- c("Symbol", "FCapc", "FCbcell", "FCcd4", "FCcd8", "FCtreg")
-heatmaptable2TOP10 <- unique(heatmaptable2TOP10)
-rownames(heatmaptable2TOP10) <- heatmaptable2TOP10[,1]
-class(heatmaptable2TOP10) <- "numeric"
-heatmaptable2TOP10 <- heatmaptable2TOP10[, 2:7]
-heatmaptable2TOP10ordered <- heatmaptable2TOP10[order(-heatmaptable2TOP10[,6]),]
-
-##note - there are two duplicates in heatmaptable2TOP10 for chr 1 because two of the same genes were filtered in different cell types for their p value, but one of the probes had one set of FC values, and the other probe had a diff set, and in one cell the first p value corresponding to those FCs was lower, and then in another cell a diff p value was lower - hence why two different set of FCs
-```
-
-```{r more pheatmap}
-breaksList2 = seq(-10, 16, by = 1)
-
-pdf("chr2_heatmap.pdf")
-pheatmap(heatmaptable2TOP10[, 2:6], 
-         cluster_rows = F, 
-         cluster_cols = F, 
-         show_rownames = T, 
-         show_colnames = T, 
-         color = colorRampPalette(rev(brewer.pal(n = 7, name = "RdBu")))(length(breaksList2)), # Defines the vector of colors for the legend (it has to be of the same lenght of breaksList) 
-         breaks = breaksList2) # Sets the breaks of the color scale as in breaksList)
-dev.off()
-```
-
-
-
-#####boxplot supplements
-
-```{r boxplots}
-#boxplot to supplement - comparing 600 GWAS gene list vs 50
-#genes that are functionally validated (smaller list) should get better scores than the larger list (i.e., if we look at an enriched set, we should get more functional association)
-
-IBDsmall <- read_excel("/Users/montanalara/Documents/R\ Mattslab/archive/IBDsmall/Data/mmc6.xlsx", sheet = "putative_risk_genes")
-
-# convert human to mouse genes using gprofiler
-IBDGWASsmallMousegenes <- gorth(IBDsmall[[1]], source_organism = "hsapiens", target_organism = "mmusculus")
-# convert mouse genes to entrez IDs
-IBDGWASsmallMouseEntrez <- gconvert(IBDGWASsmallMousegenes[["target.name"]], organism = "mmusculus", target = "ENTREZGENE_ACC")
-#separate out entrez ID from the "entrez acc" part
-IBDGWASsmallMouseEntrez <- separate(IBDGWASsmallMouseEntrez, target, c("eID", "entrez ID"), sep = ":")
-
-
-#find smaller list and bigger list
-# PROBLEM - but this is somewhat hard to do because these don't just come from chr 1 and 2, so the lists get cut WAY down and can't actually compare them
-IBDsmall.final.tableTRANS <- filter(final.tableTRANS, entrezgene %in% IBDGWASsmallMouseEntrez$`entrez ID`)
-IBDbig.final.tableTrans <- filter(final.tableTRANS, entrezgene %in% IBDGWASmouseEntrez$`entrez ID`)
-boxplot(IBDbig.final.tableTrans$Mean.FP.Rate, IBDsmall.final.tableTRANS$Mean.FP.Rate)
-#but at least comparing both the small and big (that have scores from chr 1 and 2) to the total of the final.table - those have better scores than the total
-boxplot(final.tableTRANS$Mean.FP.Rate, IBDsmall.final.tableTRANS$Mean.FP.Rate)
-boxplot(final.tableTRANS$Mean.FP.Rate, IBDbig.final.tableTrans$Mean.FP.Rate)
-```
-
-
-
-
-
-
-
-#### Chromosome 12
-
-
-
-```{r chr 12 genes}
-#using Ccc1 locus
-chr12Ccc1 <- read_excel("/Users/montanalara/Documents/MATTS LAB/IBD/Ccc1 locus genes.xlsx")
-#have to: get entrez IDs, copy results to be able to use, check entrez id list, then run score.candidates...
-#score.candidates(results6.dir, candidate.genes = as.character(DEGapc[["Entrez_Gene_ID"]]))
-
-
-mus <- useEnsembl(biomart="ensembl", dataset="mmusculus_gene_ensembl") #most recent version
-
-chr <- 12
-region.min <- 94800000
-region.max <- 112300000
-chr.region <- paste(chr, region.min, region.max, sep = ":")
-
-#get position information for all genes in the region
-gene.info <- getBM(c("external_gene_name", "entrezgene_id", "start_position", "end_position"), 
-                   "chromosomal_region", values = chr.region, mart = mus)
-
-qtl.entrez <- gene.info[!is.na(gene.info$entrezgene_id), "entrezgene_id"]
-qtl.gene <- gene.info[!is.na(gene.info$entrezgene_id), "external_gene_name"]
-
-```
-
-
-```{r SVM with chr 12}
-#resultsCH12.dir put in the beginning with the others
-score.candidates(resultsCH12.dir, candidate.genes = as.character(qtl.entrez))
-
-module.dir <- get.module.dir(resultsCH12.dir)
-include_graphics(normalizePath(paste0(module.dir[1], "/Candidate.Gene.SVM.Scores.jpg")))
-include_graphics(normalizePath(paste0(module.dir[1], "/Candidate.Gene.FP.Rates.jpg")))
-```
-
-```{r chr 12 plot}
-
-#first have to create a column called entrezgene because the function merge.svm.gene.info requires this column name, but i didn't want to change the original entrez id column name because we used that previously for the SVM scores
-gene.info$entrezgene <- as.character(gene.info$entrezgene_id)
-
-
-merge.svm.gene.info.NEWFORCH12(resultsCH12.dir, gene.info)
-include_graphics(paste0(module.dir[1], "/Candidate.Gene.SVM.Results.jpg"))
-
-final.tableCH12 <- read.csv("/Users/montanalara/Documents/R\ Mattslab/IBD/ResultsCH12/IBDGWAS/Module1/Candidate.Gene.Results.csv", sep = ",", header = TRUE, stringsAsFactors = FALSE)
-
-final.tableCH12$log10FP <- -log10(final.tableCH12$Mean.FP.Rate)
-final.tableCH12$log10FPsc <- final.tableCH12$log10FP/max(final.tableCH12$log10FP)
-final.tableCH12$mean.gene.position <- rowMeans(final.tableCH12[c("start_position", "end_position")])
-
-ggplot(final.tableCH12, 
-       aes(x = mean.gene.position, 
-           y = log10FPsc, 
-           label = external_gene_name)) + 
-       geom_text(aes(x = mean.gene.position, y = log10FPsc, label= external_gene_name))
-
-ggsave("CHR12_log10plotIBD.svg", height = 10, width = 10, units = "in")
-
+DEG.all
+Ccc1.gene.info
 ```
 
 
